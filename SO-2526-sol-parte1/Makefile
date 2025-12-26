@@ -9,28 +9,36 @@ OBJ_DIR = obj
 BIN_DIR = bin
 INCLUDE_DIR = include
 
-# executable 
+# executables 
 TARGET = Pacmanist
+SERVER_TARGET = PacmanistServer
 
 # Objects variables
 OBJS = game.o display.o board.o parser.o
+OBJS_SERVER = server.o board.o parser.o
 
 # Dependencies
 display.o = display.h
 board.o = board.h
 parser.o = parser.h
+server.o = board.h
 
 # Object files path
 vpath %.o $(OBJ_DIR)
 vpath %.c $(SRC_DIR)
 
 # Make targets
-all: pacmanist
+all: pacmanist pacmanist-server
 
 pacmanist: $(BIN_DIR)/$(TARGET)
 
+pacmanist-server: $(BIN_DIR)/$(SERVER_TARGET)
+
 $(BIN_DIR)/$(TARGET): $(OBJS) | folders
 	$(CC) $(CFLAGS) $(SLEEP) $(addprefix $(OBJ_DIR)/,$(OBJS)) -o $@ $(LDFLAGS)
+
+$(BIN_DIR)/$(SERVER_TARGET): $(OBJS_SERVER) | folders
+	$(CC) $(CFLAGS) $(addprefix $(OBJ_DIR)/,$(OBJS_SERVER)) -o $@
 
 # dont include LDFLAGS in the end, to allow compilation on macos
 %.o: %.c $($@) | folders
@@ -39,6 +47,9 @@ $(BIN_DIR)/$(TARGET): $(OBJS) | folders
 # run the program
 run: pacmanist
 	@./$(BIN_DIR)/$(TARGET) $(ARGS)  # to run use: make run ARGS="<folder>"
+
+run-server: pacmanist-server
+	@./$(BIN_DIR)/$(SERVER_TARGET) $(ARGS)  # to run use: make run-server ARGS="<levels_dir> <max_games> <registry_pipe>"
 
 # Create folders
 folders:
@@ -49,6 +60,7 @@ folders:
 clean:
 	rm -f $(OBJ_DIR)/*.o
 	rm -f $(BIN_DIR)/$(TARGET)
+	rm -f $(BIN_DIR)/$(SERVER_TARGET)
 
 # indentify targets that do not create files
-.PHONY: all clean run folders
+.PHONY: all clean run run-server folders
