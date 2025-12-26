@@ -1,8 +1,8 @@
 Starting PacmanIST server
 Levels dir: ../levels
 Max games: 1
-Registry pipe: /tmp/pacmanist_server
-Registry FIFO created: /tmp/pacmanist_server
+Registry pipe: /tmp/pacmanist_registry
+Registry FIFO created: /tmp/pacmanist_registry
 Waiting for clients on registry pipe...
 Registry pipe opened
 Connection request: req=/tmp/cliente1_request notif=/tmp/cliente1_notification
@@ -27,4 +27,7 @@ Ghost passo: 1
 Ghost Pos = 5 x 8
 Session created successfully
 Session handler started
+Pipes opened successfully
+Received disconnect request
+Session ended
 Shutting down server

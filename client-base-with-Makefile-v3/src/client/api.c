@@ -56,17 +56,19 @@ int pacman_connect(char const *req_pipe_path, char const *notif_pipe_path, char 
   write(server_fd, msg, sizeof(msg));
   close(server_fd);
   
-  // Abrir FIFOs para comunicação
-  session.notif_pipe = open(notif_pipe_path, O_RDONLY);
-  if (session.notif_pipe == -1) {
+  // Abrir FIFOs para comunicação (ordem correta para evitar deadlock)
+  // Primeiro abrir req_pipe para escrita (servidor está à espera para ler)
+  session.req_pipe = open(req_pipe_path, O_WRONLY);
+  if (session.req_pipe == -1) {
     unlink(req_pipe_path);
     unlink(notif_pipe_path);
     return 1;
   }
   
-  session.req_pipe = open(req_pipe_path, O_WRONLY);
-  if (session.req_pipe == -1) {
-    close(session.notif_pipe);
+  // Depois abrir notif_pipe para leitura
+  session.notif_pipe = open(notif_pipe_path, O_RDONLY);
+  if (session.notif_pipe == -1) {
+    close(session.req_pipe);
     unlink(req_pipe_path);
     unlink(notif_pipe_path);
     return 1;

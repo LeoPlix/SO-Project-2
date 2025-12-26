@@ -86,10 +86,35 @@ void send_board_update(session_t *sess) {
     memcpy(msg + offset, &accumulated_points, sizeof(int));
     offset += sizeof(int);
     
-    // Dados do tabuleiro
+    // Dados do tabuleiro (converter para formato do cliente)
     int board_size = board->width * board->height;
     for (int i = 0; i < board_size; i++) {
-        msg[offset++] = board->board[i].content;
+        char ch = board->board[i].content;
+        
+        // Converter caracteres internos para formato de display
+        switch (ch) {
+            case 'W': // Wall
+                msg[offset++] = '#';
+                break;
+            case 'P': // Pacman
+                msg[offset++] = 'C';
+                break;
+            case 'M': // Monster/Ghost
+                msg[offset++] = 'M';
+                break;
+            case ' ': // Empty space
+                if (board->board[i].has_portal) {
+                    msg[offset++] = '@';
+                } else if (board->board[i].has_dot) {
+                    msg[offset++] = '.';
+                } else {
+                    msg[offset++] = ' ';
+                }
+                break;
+            default:
+                msg[offset++] = ch;
+                break;
+        }
     }
     
     // Enviar
@@ -105,6 +130,36 @@ void* update_sender(void* arg) {
         
         pthread_mutex_lock(&sess->session_lock);
         if (sess->game_active && sess->notif_fd != -1) {
+            board_t *board = sess->board;
+            
+            pthread_rwlock_wrlock(&board->state_lock);
+            
+            // Processar movimentos automáticos do Pacman (se tiver movimentos definidos)
+            if (board->n_pacmans > 0 && board->pacmans[0].n_moves > 0) {
+                pacman_t *pacman = &board->pacmans[0];
+                if (pacman->alive) {
+                    int result = move_pacman(board, 0, &pacman->moves[pacman->current_move % pacman->n_moves]);
+                    
+                    if (result == REACHED_PORTAL) {
+                        debug("Pacman reached portal!\n");
+                        sess->game_active = 0;
+                    } else if (result == DEAD_PACMAN) {
+                        debug("Pacman died!\n");
+                        sess->game_active = 0;
+                    }
+                }
+            }
+            
+            // Processar movimentos dos monstros
+            for (int i = 0; i < board->n_ghosts; i++) {
+                ghost_t *ghost = &board->ghosts[i];
+                if (ghost->n_moves > 0) {
+                    move_ghost(board, i, &ghost->moves[ghost->current_move % ghost->n_moves]);
+                }
+            }
+            
+            pthread_rwlock_unlock(&board->state_lock);
+            
             send_board_update(sess);
         }
         pthread_mutex_unlock(&sess->session_lock);
@@ -181,16 +236,24 @@ void* session_handler(void* arg) {
                     char command = buffer[1];
                     debug("Received play command: %c\n", command);
                     
-                    // Processar comando
+                    // Só processar comandos manuais se o Pacman não tiver movimentos automáticos
                     if (sess->board && sess->board->n_pacmans > 0) {
+                        board_t *board = sess->board;
+                        
+                        // Se o Pacman tem movimentos definidos no ficheiro, ignorar comandos manuais
+                        if (board->pacmans[0].n_moves > 0) {
+                            debug("Pacman has automatic moves, ignoring manual command\n");
+                            break;
+                        }
+                        
                         command_t cmd;
                         cmd.command = command;
                         cmd.turns = 1;
                         cmd.turns_left = 1;
                         
-                        pthread_rwlock_rdlock(&sess->board->state_lock);
-                        int result = move_pacman(sess->board, 0, &cmd);
-                        pthread_rwlock_unlock(&sess->board->state_lock);
+                        pthread_rwlock_wrlock(&board->state_lock);
+                        int result = move_pacman(board, 0, &cmd);
+                        pthread_rwlock_unlock(&board->state_lock);
                         
                         // Enviar update imediato
                         send_board_update(sess);
