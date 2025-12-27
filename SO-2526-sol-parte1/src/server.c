@@ -1,5 +1,6 @@
 #include "board.h"
 #include "display.h"
+#include "server.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -12,28 +13,6 @@
 #include <pthread.h>
 #include <signal.h>
 
-#define MAX_PIPE_PATH_LENGTH 40
-
-// Códigos de operação
-enum {
-    OP_CODE_CONNECT = 1,
-    OP_CODE_DISCONNECT = 2,
-    OP_CODE_PLAY = 3,
-    OP_CODE_BOARD = 4,
-};
-
-// Estrutura da sessão (etapa 1.1: apenas uma sessão)
-typedef struct {
-    int active;
-    char req_pipe_path[MAX_PIPE_PATH_LENGTH];
-    char notif_pipe_path[MAX_PIPE_PATH_LENGTH];
-    int req_fd;
-    int notif_fd;
-    board_t *board;
-    pthread_t update_thread;
-    pthread_mutex_t session_lock;
-    int game_active;
-} session_t;
 
 session_t session = {0};
 int server_running = 1;

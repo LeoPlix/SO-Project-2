@@ -1,3 +1,11 @@
+#include <signal.h>
+// Handler para SIGPIPE: termina o programa de forma limpa
+void sigpipe_handler(int signum) {
+    (void)signum;
+    terminal_cleanup();
+    fprintf(stderr, "\nLigação ao servidor terminada (SIGPIPE).\n");
+    exit(0);
+}
 #include "api.h"
 #include "protocol.h"
 #include "display.h"
@@ -44,6 +52,8 @@ static void *receiver_thread(void *arg) {
 }
 
 int main(int argc, char *argv[]) {
+        // Ignorar SIGPIPE para evitar crash feio
+        signal(SIGPIPE, sigpipe_handler);
     if (argc != 3 && argc != 4) {
         fprintf(stderr,
             "Usage: %s <client_id> <register_pipe> [commands_file]\n",
@@ -154,6 +164,6 @@ int main(int argc, char *argv[]) {
     pthread_mutex_destroy(&mutex);
 
     terminal_cleanup();
-
+    
     return 0;
 }

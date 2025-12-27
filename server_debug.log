@@ -1,0 +1,7 @@
+Starting PacmanIST server
+Levels dir: levels/
+Max games: 1
+Registry pipe: /tmp/registry_pipe
+Registry FIFO created: /tmp/registry_pipe
+Waiting for clients on registry pipe...
+Failed to open registry pipe: Interrupted system call

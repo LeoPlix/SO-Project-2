@@ -1,3 +1,9 @@
+# Caminho para o FIFO e níveis
+LEVELS_DIR=../levels
+REGISTRY_PIPE=/tmp/pacmanist_server
+MAX_GAMES=1
+
+### (Removido bloco duplicado de run-server)
 # Compiler variables
 CC = gcc
 CFLAGS = -g -Wall -Wextra -Werror -std=c17 -D_POSIX_C_SOURCE=200809L
@@ -49,7 +55,7 @@ run: pacmanist
 	@./$(BIN_DIR)/$(TARGET) $(ARGS)  # to run use: make run ARGS="<folder>"
 
 run-server: pacmanist-server
-	@./$(BIN_DIR)/$(SERVER_TARGET) $(ARGS)  # to run use: make run-server ARGS="<levels_dir> <max_games> <registry_pipe>"
+	@./$(BIN_DIR)/$(SERVER_TARGET) $(LEVELS_DIR) $(MAX_GAMES) $(REGISTRY_PIPE)
 
 # Create folders
 folders:

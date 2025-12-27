@@ -1,15 +1,14 @@
 Starting PacmanIST server
 Levels dir: ../levels
 Max games: 1
-Registry pipe: /tmp/pacmanist_registry
-Registry FIFO created: /tmp/pacmanist_registry
+Registry pipe: /tmp/pacmanist_server
+Registry FIFO created: /tmp/pacmanist_server
 Waiting for clients on registry pipe...
 Registry pipe opened
 Connection request: req=/tmp/cliente1_request notif=/tmp/cliente1_notification
 Loading level: level1.lvl
-DIM = 15 x 10
+DIM = 16 x 10
 TEMPO = 100
-PAC = ../levels/pacman.p
 MON file: ../levels/monstro1.m
 Line: XXXXXXXXXXXXXXx
 Line: Xoooooooooooooxx
@@ -21,13 +20,52 @@ Line: XoXXXoXXXoXXXooX
 Line: XoooooooooooooooX
 Line: XooooooooooooooX
 Line: XXXXXXXXXXXXXXX
-Pacman passo: 0
-Pacman Pos = 1 x 1
 Ghost passo: 1
 Ghost Pos = 5 x 8
 Session created successfully
 Session handler started
 Pipes opened successfully
-Received disconnect request
+Received play command: S
+Received play command: S
+Received play command: A
+Received play command: W
+Received play command: A
+Received play command: A
+Received play command: A
+Received play command: A
+Received play command: A
+Received play command: A
+Received play command: A
+Received play command: A
+Received play command: A
+Received play command: A
+Received play command: A
+Received play command: A
+Received play command: S
+Received play command: S
+Received play command: S
+Received play command: S
+Received play command: D
+Received play command: D
+Received play command: W
+Received play command: W
+Received play command: W
+Received play command: D
+Received play command: D
+Received play command: D
+Received play command: D
+Received play command: D
+Received play command: D
+Received play command: D
+Received play command: D
+Received play command: D
+Received play command: S
+Received play command: S
+Received play command: S
+Received play command: S
+Received play command: D
+Received play command: D
+Received play command: D
+Pacman reached portal!
 Session ended
 Shutting down server
