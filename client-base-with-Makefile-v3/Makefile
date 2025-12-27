@@ -1,3 +1,10 @@
+# Caminho para o FIFO e nome do cliente
+REGISTRY_PIPE=/tmp/pacmanist_server
+CLIENT_NAME=cliente1
+
+.PHONY: run-client
+run-client: client
+	./bin/client $(CLIENT_NAME) $(REGISTRY_PIPE)
 # Compiler variables
 CC = gcc
 CFLAGS = -g -Wall -Wextra -std=c17 -D_POSIX_C_SOURCE=200809L

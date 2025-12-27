@@ -27,6 +27,31 @@ Session handler started
 Pipes opened successfully
 Received play command: S
 Received play command: S
+Received play command: S
+Received disconnect request
+Session ended
+Connection request: req=/tmp/cliente1_request notif=/tmp/cliente1_notification
+Loading level: level1.lvl
+DIM = 16 x 10
+TEMPO = 100
+MON file: ../levels/monstro1.m
+Line: XXXXXXXXXXXXXXx
+Line: Xoooooooooooooxx
+Line: XoXXXoXXXXoXXooX
+Line: XoXoooooooooXooX
+Line: XoXoXXXoXXXoXooX
+Line: XoooXoooooXooo@X
+Line: XoXXXoXXXoXXXooX
+Line: XoooooooooooooooX
+Line: XooooooooooooooX
+Line: XXXXXXXXXXXXXXX
+Ghost passo: 1
+Ghost Pos = 5 x 8
+Session created successfully
+Session handler started
+Pipes opened successfully
+Received play command: S
+Received play command: S
 Received play command: A
 Received play command: W
 Received play command: A
@@ -41,6 +66,8 @@ Received play command: A
 Received play command: A
 Received play command: A
 Received play command: A
+Received play command: A
+Received play command: A
 Received play command: S
 Received play command: S
 Received play command: S
@@ -49,23 +76,32 @@ Received play command: D
 Received play command: D
 Received play command: W
 Received play command: W
+Received play command: D
+Received play command: D
+Received play command: D
+Received play command: D
+Received play command: D
+Received play command: D
+Received play command: D
+Received play command: D
+Received play command: A
+Received play command: A
+Received play command: A
+Received play command: A
+Received play command: S
+Received play command: S
+Received play command: D
+Received play command: S
+Received play command: S
+Received play command: D
+Received play command: S
+Received play command: S
+Received play command: D
+Received play command: D
+Received play command: D
+Received play command: D
+Received play command: D
 Received play command: W
-Received play command: D
-Received play command: D
-Received play command: D
-Received play command: D
-Received play command: D
-Received play command: D
-Received play command: D
-Received play command: D
-Received play command: D
-Received play command: S
-Received play command: S
-Received play command: S
-Received play command: S
-Received play command: D
-Received play command: D
-Received play command: D
+Received play command: W
 Pacman reached portal!
 Session ended
-Shutting down server
