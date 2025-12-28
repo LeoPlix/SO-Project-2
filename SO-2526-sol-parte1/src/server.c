@@ -12,6 +12,7 @@
 #include <errno.h>
 #include <pthread.h>
 #include <signal.h>
+#include <sys/time.h>
 
 
 session_t *sessions = NULL;
@@ -21,21 +22,69 @@ int server_running = 1;
 char registry_pipe[MAX_PIPE_PATH_LENGTH];
 char levels_dir[256];
 
+// ========== Implementação de semáforos portáveis ==========
+
+void portable_sem_init(portable_sem_t *sem, int value) {
+    pthread_mutex_init(&sem->mutex, NULL);
+    pthread_cond_init(&sem->cond, NULL);
+    sem->value = value;
+}
+
+void portable_sem_destroy(portable_sem_t *sem) {
+    pthread_mutex_destroy(&sem->mutex);
+    pthread_cond_destroy(&sem->cond);
+}
+
+void portable_sem_wait(portable_sem_t *sem) {
+    pthread_mutex_lock(&sem->mutex);
+    while (sem->value <= 0) {
+        pthread_cond_wait(&sem->cond, &sem->mutex);
+    }
+    sem->value--;
+    pthread_mutex_unlock(&sem->mutex);
+}
+
+int portable_sem_timedwait(portable_sem_t *sem, int timeout_ms) {
+    struct timespec ts;
+    struct timeval tv;
+    
+    gettimeofday(&tv, NULL);
+    ts.tv_sec = tv.tv_sec + (timeout_ms / 1000);
+    ts.tv_nsec = (tv.tv_usec * 1000) + ((timeout_ms % 1000) * 1000000);
+    
+    if (ts.tv_nsec >= 1000000000) {
+        ts.tv_sec++;
+        ts.tv_nsec -= 1000000000;
+    }
+    
+    pthread_mutex_lock(&sem->mutex);
+    while (sem->value <= 0) {
+        int result = pthread_cond_timedwait(&sem->cond, &sem->mutex, &ts);
+        if (result == ETIMEDOUT) {
+            pthread_mutex_unlock(&sem->mutex);
+            return -1;
+        }
+    }
+    sem->value--;
+    pthread_mutex_unlock(&sem->mutex);
+    return 0;
+}
+
+void portable_sem_post(portable_sem_t *sem) {
+    pthread_mutex_lock(&sem->mutex);
+    sem->value++;
+    pthread_cond_signal(&sem->cond);
+    pthread_mutex_unlock(&sem->mutex);
+}
+
 // Inicializar buffer produtor-consumidor
 void init_connection_buffer(connection_buffer_t *buffer) {
     buffer->in = 0;
     buffer->out = 0;
     buffer->active = 1;
     
-    // Usar semáforos não-nomeados (funcionam em todos os sistemas POSIX)
-    if (sem_init(&buffer->empty, 0, BUFFER_SIZE) != 0) {
-        perror("sem_init empty failed");
-        exit(1);
-    }
-    if (sem_init(&buffer->full, 0, 0) != 0) {
-        perror("sem_init full failed");
-        exit(1);
-    }
+    portable_sem_init(&buffer->empty, BUFFER_SIZE);
+    portable_sem_init(&buffer->full, 0);
     
     pthread_mutex_init(&buffer->mutex, NULL);
 }
@@ -44,8 +93,8 @@ void init_connection_buffer(connection_buffer_t *buffer) {
 void destroy_connection_buffer(connection_buffer_t *buffer) {
     buffer->active = 0;
     
-    sem_destroy(&buffer->empty);
-    sem_destroy(&buffer->full);
+    portable_sem_destroy(&buffer->empty);
+    portable_sem_destroy(&buffer->full);
     pthread_mutex_destroy(&buffer->mutex);
 }
 
@@ -53,10 +102,10 @@ void destroy_connection_buffer(connection_buffer_t *buffer) {
 void buffer_insert(connection_buffer_t *buffer, connection_request_t *request) {
     if (!buffer->active) return;
     
-    sem_wait(&buffer->empty);
+    portable_sem_wait(&buffer->empty);
     
     if (!buffer->active) {
-        sem_post(&buffer->empty);
+        portable_sem_post(&buffer->empty);
         return;
     }
     
@@ -66,49 +115,22 @@ void buffer_insert(connection_buffer_t *buffer, connection_request_t *request) {
     buffer->in = (buffer->in + 1) % BUFFER_SIZE;
     
     pthread_mutex_unlock(&buffer->mutex);
-    sem_post(&buffer->full);
+    portable_sem_post(&buffer->full);
 }
 
 // Remover pedido do buffer (consumidor)
 int buffer_remove(connection_buffer_t *buffer, connection_request_t *request) {
     if (!buffer->active) return -1;
     
-    struct timespec ts;
-    clock_gettime(CLOCK_REALTIME, &ts);
-    ts.tv_sec += 1; // timeout de 1 segundo
+    // Timeout de 1 segundo
+    int result = portable_sem_timedwait(&buffer->full, 1000);
     
-    // Tentar usar sem_timedwait (disponível na maioria dos sistemas)
-    int result = sem_timedwait(&buffer->full, &ts);
-    
-    // Se sem_timedwait não estiver disponível, usar fallback com sem_trywait
-    if (result != 0 && errno == ENOSYS) {
-        // Fallback: usar sem_trywait com loop
-        int attempts = 0;
-        while (attempts < 10) {
-            if (!buffer->active) return -1;
-            
-            if (sem_trywait(&buffer->full) == 0) {
-                result = 0;
-                break;
-            }
-            
-            if (errno != EAGAIN) {
-                return -1;
-            }
-            
-            usleep(100000); // 100ms
-            attempts++;
-        }
-        
-        if (attempts >= 10) {
-            return -1; // timeout
-        }
-    } else if (result != 0) {
-        return -1; // timeout ou erro
+    if (result != 0) {
+        return -1; // timeout
     }
     
     if (!buffer->active) {
-        sem_post(&buffer->full);
+        portable_sem_post(&buffer->full);
         return -1;
     }
     
@@ -118,7 +140,7 @@ int buffer_remove(connection_buffer_t *buffer, connection_request_t *request) {
     buffer->out = (buffer->out + 1) % BUFFER_SIZE;
     
     pthread_mutex_unlock(&buffer->mutex);
-    sem_post(&buffer->empty);
+    portable_sem_post(&buffer->empty);
     
     return 0;
 }

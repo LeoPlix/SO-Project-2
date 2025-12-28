@@ -79,161 +79,21 @@ Ghost passo: 1
 Ghost Pos = 5 x 8
 Session 2 handler started
 Pipes opened successfully
-Session 2: Received play command: D
-Session 2: Received play command: S
-Session 2: Received play command: A
-Session 2: Received play command: S
-Session 2: Received play command: S
-Session 2: Received play command: S
-Session 2: Received play command: S
-Session 2: Received play command: S
-Session 2: Received play command: S
-Session 2: Received play command: S
-Session 2: Received play command: S
-Session 2: Received play command: S
-Session 2: Received play command: S
-Session 2: Received play command: D
-Session 2: Received play command: D
-Session 2: Received play command: D
-Session 2: Received play command: D
-Session 2: Received play command: D
-Killing 0 pacman
-
-Session 2: Pacman died (manual)!
+Session 2: Received disconnect request
+Session 2: Waiting for client to process final update
 Session 2: Cleaning up resources
 Session 2 ended
-Session 0: Received play command: S
-Session 0: Received play command: S
-Session 0: Received play command: S
-Session 0: Received play command: S
-Session 0: Received play command: S
-Session 0: Received play command: S
-Session 0: Received play command: S
-Session 0: Received play command: D
-Session 0: Received play command: D
-Session 0: Received play command: D
-Session 0: Received play command: D
-Killing 0 pacman
-
-Session 0: Pacman died (manual)!
-Session 0: Cleaning up resources
-Session 0 ended
-Session 1: Received play command: S
-Session 1: Received play command: D
-Session 1: Received play command: W
-Session 1: Received play command: D
-Session 1: Received play command: D
-Session 1: Received play command: D
-Session 1: Received play command: D
-Session 1: Received play command: D
-Session 1: Received play command: D
-Session 1: Received play command: D
-Session 1: Received play command: D
-Session 1: Received play command: D
-Session 1: Received play command: D
-Session 1: Received play command: D
-Session 1: Received play command: D
-Session 1: Received play command: S
-Session 1: Received play command: D
-Session 1: Received play command: S
-Session 1: Received play command: S
-Session 1: Received play command: S
-Session 1: Pacman reached portal (manual)!
-Session 1: Found 2 levels, current level: 1
-Session 1: Loading level level2.lvl (index 1)
-DIM = 20 x 12
-TEMPO = 120
-PAC = ../levels/pacman2.p
-MON file: ../levels/monstro2.m
-MON file: ../levels/monstro3.m
-Line: XXXXXXXXXXXXXXXXXXXXX
-Line: XoooooooooooooooooooX
-Line: XoXXXXoXXXXoXXXXoXXoX
-Line: XoXoooXoooooooooXoooX
-Line: XoXoXoXoXXXXXXoXoXoXX
-Line: XoooXoooXoooooXoXoooX
-Line: XoXXXoXXXoXXXoXXXoXoX
-Line: XoooooXoooooooooXoooX
-Line: XoXXXXXoXXXXoXXXXXXoX
-Line: XoooooooooooooooooooX
-Line: XoooooooooooooooooooX
-Line: XXXXXXXXXXXXXXXXXXXXX
-Pacman passo: 0
-Pacman Pos = 1 x 1
-Ghost passo: 2
-Ghost Pos = 3 x 10
-Ghost passo: 1
-Ghost Pos = 7 x 15
-Session 1: Received play command: A
-Session 1: Received play command: S
-Session 1: Received play command: S
-Session 1: Received play command: W
-Session 1: Received play command: D
-Session 1: Received play command: W
-Session 1: Received play command: D
-Session 1: Received play command: D
-Session 1: Received play command: D
-Session 1: Received play command: D
-Session 1: Received play command: D
-Session 1: Received play command: D
-Session 1: Received play command: D
-Session 1: Received play command: D
-Session 1: Received play command: D
-Session 1: Received play command: D
-Session 1: Received play command: D
-Session 1: Received play command: D
-Session 1: Received play command: D
-Session 1: Received play command: D
-Session 1: Received play command: D
-Session 1: Received play command: D
-Session 1: Received play command: D
-Session 1: Received play command: D
-Session 1: Received play command: D
-Session 1: Received play command: D
-Session 1: Received play command: S
-Session 1: Received play command: A
-Session 1: Received play command: A
-Session 1: Received play command: S
-Session 1: Received play command: A
-Session 1: Received play command: S
-Session 1: Received play command: S
-Session 1: Received play command: S
-Session 1: Received play command: D
-Session 1: Received play command: S
-Session 1: Received play command: D
-Session 1: Received play command: D
-Session 1: Received play command: D
-Session 1: Received play command: D
-Session 1: Received play command: D
-Session 1: Received play command: D
-Session 1: Received play command: D
-Session 1: Received play command: S
-Session 1: Received play command: S
-Session 1: Received play command: S
-Session 1: Received play command: S
-Session 1: Received play command: S
-Session 1: Received play command: S
-Session 1: Received play command: A
-Session 1: Received play command: A
-Session 1: Received play command: A
-Session 1: Received play command: A
-Session 1: Received play command: A
-Session 1: Received play command: A
-Session 1: Received play command: A
-Session 1: Received play command: A
-Session 1: Received play command: A
-Session 1: Received play command: A
-Session 1: Received play command: A
-Session 1: Received play command: A
-Session 1: Received play command: A
-Session 1: Received play command: A
-Session 1: Received play command: A
-Session 1: Received play command: A
-Killing 0 pacman
-
-Session 1: Pacman died (manual)!
+Session 1: Received disconnect request
+Session 1: Waiting for client to process final update
 Session 1: Cleaning up resources
 Session 1 ended
+Session 0: Received disconnect request
+Session 0: Waiting for client to process final update
+Session 0: Cleaning up resources
+Session 0 ended
+Manager thread 1 ended
 Manager thread 0 ended
 Manager thread 2 ended
-Manager thread 1 ended
+Host thread ended
+Host thread joined, waiting for managers
+Shutting down server
