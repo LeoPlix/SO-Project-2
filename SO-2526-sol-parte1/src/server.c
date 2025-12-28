@@ -18,6 +18,7 @@ session_t *sessions = NULL;
 int max_games = 0;
 connection_buffer_t conn_buffer;
 volatile sig_atomic_t server_running = 1;
+volatile sig_atomic_t sigusr1_received = 0;  // Flag para SIGUSR1
 char registry_pipe[MAX_PIPE_PATH_LENGTH];
 char levels_dir[256];
 int shutdown_pipe[2]; // Pipe para acordar threads quando servidor terminar
@@ -168,6 +169,13 @@ int load_next_level(session_t *sess) {
         return -1; // Não há mais níveis
     }
     
+    // Guardar pontos acumulados antes de descarregar o nível
+    int accumulated_points = 0;
+    if (sess->board != NULL && sess->board->n_pacmans > 0) {
+        accumulated_points = sess->board->pacmans[0].points;
+        debug("Session %d: Saving %d points before level transition\n", sess->session_id, accumulated_points);
+    }
+    
     // Descarregar nível atual
     if (sess->board != NULL) {
         unload_level(sess->board);
@@ -182,7 +190,76 @@ int load_next_level(session_t *sess) {
         return -1;
     }
     
+    // Restaurar pontos acumulados no novo nível
+    if (sess->board->n_pacmans > 0) {
+        sess->board->pacmans[0].points = accumulated_points;
+        debug("Session %d: Restored %d points in new level\n", sess->session_id, accumulated_points);
+    }
+    
     return 0;
+}
+
+// Função para gerar ficheiro com top 5 clientes por pontuação
+void generate_top5_file() {
+    debug("Generating top 5 clients file...\n");
+    
+    // Estrutura auxiliar para ordenar clientes por pontos
+    typedef struct {
+        int session_id;
+        int points;
+    } client_score_t;
+    
+    client_score_t scores[MAX_SESSIONS];
+    int num_active = 0;
+    
+    // Coletar pontuações de todos os clientes ativos
+    for (int i = 0; i < max_games; i++) {
+        pthread_mutex_lock(&sessions[i].session_lock);
+        if (sessions[i].active && sessions[i].board != NULL) {
+            scores[num_active].session_id = sessions[i].session_id;
+            if (sessions[i].board->n_pacmans > 0) {
+                scores[num_active].points = sessions[i].board->pacmans[0].points;
+            } else {
+                scores[num_active].points = 0;
+            }
+            num_active++;
+        }
+        pthread_mutex_unlock(&sessions[i].session_lock);
+    }
+    
+    // Ordenar por pontuação (ordem decrescente)
+    for (int i = 0; i < num_active - 1; i++) {
+        for (int j = i + 1; j < num_active; j++) {
+            if (scores[j].points > scores[i].points) {
+                client_score_t temp = scores[i];
+                scores[i] = scores[j];
+                scores[j] = temp;
+            }
+        }
+    }
+    
+    // Gerar ficheiro com top 5
+    FILE *f = fopen("top5.txt", "w");
+    if (f == NULL) {
+        debug("Error creating top5.txt file\n");
+        return;
+    }
+    
+    fprintf(f, "Top 5 Clientes por Pontuação\n");
+    fprintf(f, "================================\n\n");
+    
+    int limit = (num_active < 5) ? num_active : 5;
+    for (int i = 0; i < limit; i++) {
+        fprintf(f, "%d. Cliente ID %d: %d pontos\n", 
+                i + 1, scores[i].session_id, scores[i].points);
+    }
+    
+    if (num_active == 0) {
+        fprintf(f, "Nenhum cliente ativo no momento.\n");
+    }
+    
+    fclose(f);
+    debug("Top 5 file generated successfully with %d clients\n", limit);
 }
 
 void signal_handler(int signum) {
@@ -191,6 +268,10 @@ void signal_handler(int signum) {
         // Acordar threads escrevendo no pipe de shutdown
         char c = 1;
         write(shutdown_pipe[1], &c, 1);
+    } else if (signum == SIGUSR1) {
+        // Memorizar que recebemos SIGUSR1
+        sigusr1_received = 1;
+        debug("SIGUSR1 received\n");
     }
 }
 
@@ -366,6 +447,12 @@ void* host_thread(void* arg) {
     debug("Registry pipe opened in host thread\n");
     
     while (server_running) {
+        // Verificar se recebemos SIGUSR1
+        if (sigusr1_received) {
+            sigusr1_received = 0;  // Reset flag
+            generate_top5_file();
+        }
+        
         char buffer[256];
         ssize_t bytes_read = read(registry_fd, buffer, sizeof(buffer));
         
@@ -436,7 +523,13 @@ void* manager_thread(void* arg) {
     int manager_id = *(int*)arg;
     free(arg);
     
-    debug("Manager thread %d started\n", manager_id);
+    // Bloquear SIGUSR1 nesta thread
+    sigset_t mask;
+    sigemptyset(&mask);
+    sigaddset(&mask, SIGUSR1);
+    pthread_sigmask(SIG_BLOCK, &mask, NULL);
+    
+    debug("Manager thread %d started (SIGUSR1 blocked)\n", manager_id);
     
     while (server_running) {
         connection_request_t request;
@@ -707,8 +800,9 @@ int main(int argc, char** argv) {
     
     debug("Registry FIFO created: %s\n", registry_pipe);
     
-    // Configurar handler de sinal - apenas SIGINT (Ctrl+C)
-    signal(SIGINT, signal_handler);
+    // Configurar handlers de sinal
+    signal(SIGINT, signal_handler);   // SIGINT (Ctrl+C)
+    signal(SIGUSR1, signal_handler);  // SIGUSR1 para gerar top 5
     
     debug("Starting host thread and manager threads\n");
     
