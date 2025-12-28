@@ -81,10 +81,6 @@ void buffer_insert(connection_buffer_t *buffer, connection_request_t *request) {
 int buffer_remove(connection_buffer_t *buffer, connection_request_t *request) {
     if (!buffer->active) return -1;
     
-    struct timespec ts;
-    clock_gettime(CLOCK_REALTIME, &ts);
-    ts.tv_sec += 1; // timeout de 1 segundo
-    
     // macOS não tem sem_timedwait, usar sem_trywait com sleep
     int attempts = 0;
     while (attempts < 10) {
@@ -98,7 +94,7 @@ int buffer_remove(connection_buffer_t *buffer, connection_request_t *request) {
             return -1;
         }
         
-        usleep(100000); // 100ms
+        sleep_ms(100); // 100ms
         attempts++;
     }
     
