@@ -1,0 +1,15 @@
+# Ignorar ficheiros objeto
+obj/*.o
+
+# Ignorar binários
+bin/*
+
+# Ignorar ficheiros de debug
+*.log
+*.debug
+server_debug.log
+client_debug.log
+
+# Ignorar ficheiros temporários
+*~
+*.swp
