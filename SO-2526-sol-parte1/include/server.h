@@ -43,8 +43,8 @@ typedef struct {
     connection_request_t requests[BUFFER_SIZE];
     int in;  // índice de inserção
     int out; // índice de remoção
-    sem_t *empty; // semáforo para slots vazios (named semaphore para macOS)
-    sem_t *full;  // semáforo para slots cheios (named semaphore para macOS)
+    sem_t empty; // semáforo para slots vazios
+    sem_t full;  // semáforo para slots cheios
     pthread_mutex_t mutex; // mutex para acesso exclusivo
     int active; // flag para indicar se o buffer está ativo
 } connection_buffer_t;

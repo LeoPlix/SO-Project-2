@@ -27,15 +27,13 @@ void init_connection_buffer(connection_buffer_t *buffer) {
     buffer->out = 0;
     buffer->active = 1;
     
-    // Usar semáforos nomeados para compatibilidade com macOS
-    sem_unlink("/pacmanist_empty");
-    sem_unlink("/pacmanist_full");
-    
-    buffer->empty = sem_open("/pacmanist_empty", O_CREAT | O_EXCL, 0644, BUFFER_SIZE);
-    buffer->full = sem_open("/pacmanist_full", O_CREAT | O_EXCL, 0644, 0);
-    
-    if (buffer->empty == SEM_FAILED || buffer->full == SEM_FAILED) {
-        perror("sem_open failed");
+    // Usar semáforos não-nomeados (funcionam em todos os sistemas POSIX)
+    if (sem_init(&buffer->empty, 0, BUFFER_SIZE) != 0) {
+        perror("sem_init empty failed");
+        exit(1);
+    }
+    if (sem_init(&buffer->full, 0, 0) != 0) {
+        perror("sem_init full failed");
         exit(1);
     }
     
@@ -46,14 +44,8 @@ void init_connection_buffer(connection_buffer_t *buffer) {
 void destroy_connection_buffer(connection_buffer_t *buffer) {
     buffer->active = 0;
     
-    if (buffer->empty != SEM_FAILED) {
-        sem_close(buffer->empty);
-        sem_unlink("/pacmanist_empty");
-    }
-    if (buffer->full != SEM_FAILED) {
-        sem_close(buffer->full);
-        sem_unlink("/pacmanist_full");
-    }
+    sem_destroy(&buffer->empty);
+    sem_destroy(&buffer->full);
     pthread_mutex_destroy(&buffer->mutex);
 }
 
@@ -61,10 +53,10 @@ void destroy_connection_buffer(connection_buffer_t *buffer) {
 void buffer_insert(connection_buffer_t *buffer, connection_request_t *request) {
     if (!buffer->active) return;
     
-    sem_wait(buffer->empty);
+    sem_wait(&buffer->empty);
     
     if (!buffer->active) {
-        sem_post(buffer->empty);
+        sem_post(&buffer->empty);
         return;
     }
     
@@ -74,7 +66,7 @@ void buffer_insert(connection_buffer_t *buffer, connection_request_t *request) {
     buffer->in = (buffer->in + 1) % BUFFER_SIZE;
     
     pthread_mutex_unlock(&buffer->mutex);
-    sem_post(buffer->full);
+    sem_post(&buffer->full);
 }
 
 // Remover pedido do buffer (consumidor)
@@ -85,29 +77,38 @@ int buffer_remove(connection_buffer_t *buffer, connection_request_t *request) {
     clock_gettime(CLOCK_REALTIME, &ts);
     ts.tv_sec += 1; // timeout de 1 segundo
     
-    // macOS não tem sem_timedwait, usar sem_trywait com sleep
-    int attempts = 0;
-    while (attempts < 10) {
-        if (!buffer->active) return -1;
-        
-        if (sem_trywait(buffer->full) == 0) {
-            break;
-        }
-        
-        if (errno != EAGAIN) {
-            return -1;
-        }
-        
-        usleep(100000); // 100ms
-        attempts++;
-    }
+    // Tentar usar sem_timedwait (disponível na maioria dos sistemas)
+    int result = sem_timedwait(&buffer->full, &ts);
     
-    if (attempts >= 10) {
-        return -1; // timeout
+    // Se sem_timedwait não estiver disponível, usar fallback com sem_trywait
+    if (result != 0 && errno == ENOSYS) {
+        // Fallback: usar sem_trywait com loop
+        int attempts = 0;
+        while (attempts < 10) {
+            if (!buffer->active) return -1;
+            
+            if (sem_trywait(&buffer->full) == 0) {
+                result = 0;
+                break;
+            }
+            
+            if (errno != EAGAIN) {
+                return -1;
+            }
+            
+            usleep(100000); // 100ms
+            attempts++;
+        }
+        
+        if (attempts >= 10) {
+            return -1; // timeout
+        }
+    } else if (result != 0) {
+        return -1; // timeout ou erro
     }
     
     if (!buffer->active) {
-        sem_post(buffer->full);
+        sem_post(&buffer->full);
         return -1;
     }
     
@@ -117,7 +118,7 @@ int buffer_remove(connection_buffer_t *buffer, connection_request_t *request) {
     buffer->out = (buffer->out + 1) % BUFFER_SIZE;
     
     pthread_mutex_unlock(&buffer->mutex);
-    sem_post(buffer->empty);
+    sem_post(&buffer->empty);
     
     return 0;
 }
@@ -304,6 +305,7 @@ void* update_sender(void* arg) {
                             // Não há mais níveis - vitória!
                             sess->victory = 1;
                             send_board_update(sess);
+                            usleep(100000); // Pequeno delay para garantir que a mensagem é enviada
                             sess->game_active = 0;
                         } else {
                             // Nível carregado com sucesso
@@ -316,6 +318,7 @@ void* update_sender(void* arg) {
                         // Enviar update final para cliente ver game over
                         pthread_rwlock_unlock(&board->state_lock);
                         send_board_update(sess);
+                        usleep(100000); // Pequeno delay para garantir que a mensagem é enviada
                         sess->game_active = 0;
                         pthread_mutex_unlock(&sess->session_lock);
                         continue;
@@ -558,6 +561,7 @@ void* session_handler(void* arg) {
                                 // Não há mais níveis - vitória!
                                 sess->victory = 1;
                                 send_board_update(sess);
+                                usleep(100000); // Pequeno delay para garantir que a mensagem é enviada
                                 sess->game_active = 0;
                             } else {
                                 // Nível carregado com sucesso
@@ -567,6 +571,7 @@ void* session_handler(void* arg) {
                             debug("Session %d: Pacman died (manual)!\n", sess->session_id);
                             // Enviar update final para cliente ver game over
                             send_board_update(sess);
+                            usleep(100000); // Pequeno delay para garantir que a mensagem é enviada
                             sess->game_active = 0;
                         } else {
                             // Enviar update normal
@@ -587,6 +592,10 @@ void* session_handler(void* arg) {
     
     // Aguardar thread de updates
     pthread_join(sess->update_thread, NULL);
+    
+    // Dar tempo ao cliente para processar última mensagem antes de fechar pipes
+    debug("Session %d: Waiting for client to process final update\n", sess->session_id);
+    usleep(200000); // 200ms de espera
     
     // Cleanup
     debug("Session %d: Cleaning up resources\n", sess->session_id);
