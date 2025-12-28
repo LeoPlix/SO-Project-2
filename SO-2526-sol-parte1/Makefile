@@ -50,13 +50,6 @@ $(BIN_DIR)/$(SERVER_TARGET): $(OBJS_SERVER) | folders
 %.o: %.c $($@) | folders
 	$(CC) -I $(INCLUDE_DIR) $(CFLAGS) -o $(OBJ_DIR)/$@ -c $<
 
-# run the program
-run: pacmanist
-	@./$(BIN_DIR)/$(TARGET) $(ARGS)  # to run use: make run ARGS="<folder>"
-
-run-server: pacmanist-server
-	@./$(BIN_DIR)/$(SERVER_TARGET) $(LEVELS_DIR) $(MAX_GAMES) $(REGISTRY_PIPE)
-
 # Create folders
 folders:
 	mkdir -p $(OBJ_DIR)
@@ -69,4 +62,4 @@ clean:
 	rm -f $(BIN_DIR)/$(SERVER_TARGET)
 
 # indentify targets that do not create files
-.PHONY: all clean run run-server folders
+.PHONY: all clean folders
