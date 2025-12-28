@@ -182,7 +182,7 @@ int load_next_level(session_t *sess) {
 }
 
 void signal_handler(int signum) {
-    if (signum == SIGINT || signum == SIGTERM) {
+    if (signum == SIGINT) {
         server_running = 0;
     }
 }
@@ -363,6 +363,17 @@ void* host_thread(void* arg) {
                 // EOF - reabrir pipe
                 close(registry_fd);
                 registry_fd = open(registry_pipe, O_RDONLY);
+                if (registry_fd == -1) {
+                    debug("Failed to reopen registry pipe: %s\n", strerror(errno));
+                    sleep_ms(100); // Esperar 100ms antes de tentar novamente
+                    continue;
+                }
+                continue;
+            }
+            // Erro de leitura - continuar se o servidor ainda estiver a correr
+            if (server_running) {
+                debug("Error reading from registry pipe: %s, continuing...\n", strerror(errno));
+                sleep_ms(100);
                 continue;
             }
             break;
@@ -664,9 +675,8 @@ int main(int argc, char** argv) {
     
     debug("Registry FIFO created: %s\n", registry_pipe);
     
-    // Configurar handlers de sinais
+    // Configurar handler de sinal - apenas SIGINT (Ctrl+C)
     signal(SIGINT, signal_handler);
-    signal(SIGTERM, signal_handler);
     
     debug("Starting host thread and manager threads\n");
     
@@ -684,7 +694,17 @@ int main(int argc, char** argv) {
     
     debug("All threads created, server is running\n");
     
-    // Aguardar sinal de terminação
+    // Aguardar sinal de terminação (SIGINT)
+    while (server_running) {
+        sleep(1);
+    }
+    
+    debug("Shutdown signal received, terminating threads\n");
+    
+    // Desativar buffer para acordar threads bloqueadas
+    destroy_connection_buffer(&conn_buffer);
+    
+    // Aguardar thread anfitriã
     pthread_join(host_tid, NULL);
     
     debug("Host thread joined, waiting for managers\n");
@@ -716,9 +736,6 @@ int main(int argc, char** argv) {
     }
     
     free(sessions);
-    
-    // Destruir buffer
-    destroy_connection_buffer(&conn_buffer);
     
     unlink(registry_pipe);
     
