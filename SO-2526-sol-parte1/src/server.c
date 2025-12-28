@@ -17,9 +17,10 @@
 session_t *sessions = NULL;
 int max_games = 0;
 connection_buffer_t conn_buffer;
-int server_running = 1;
+volatile sig_atomic_t server_running = 1;
 char registry_pipe[MAX_PIPE_PATH_LENGTH];
 char levels_dir[256];
+int shutdown_pipe[2]; // Pipe para acordar threads quando servidor terminar
 
 // Inicializar buffer produtor-consumidor
 void init_connection_buffer(connection_buffer_t *buffer) {
@@ -46,7 +47,10 @@ void init_connection_buffer(connection_buffer_t *buffer) {
 void destroy_connection_buffer(connection_buffer_t *buffer) {
     buffer->active = 0;
     
+    // Desbloquear semáforos para acordar threads bloqueadas
     if (buffer->empty != SEM_FAILED) {
+        sem_post(buffer->empty);
+        sem_post(buffer->full);
         sem_close(buffer->empty);
         sem_unlink("/pacmanist_empty");
     }
@@ -184,6 +188,9 @@ int load_next_level(session_t *sess) {
 void signal_handler(int signum) {
     if (signum == SIGINT) {
         server_running = 0;
+        // Acordar threads escrevendo no pipe de shutdown
+        char c = 1;
+        write(shutdown_pipe[1], &c, 1);
     }
 }
 
@@ -345,12 +352,16 @@ void* host_thread(void* arg) {
     
     debug("Host thread started\n");
     
-    // Abrir FIFO de registro
-    int registry_fd = open(registry_pipe, O_RDONLY);
+    // Abrir FIFO de registro em modo não-bloqueante primeiro
+    int registry_fd = open(registry_pipe, O_RDONLY | O_NONBLOCK);
     if (registry_fd == -1) {
         debug("Failed to open registry pipe: %s\n", strerror(errno));
         return NULL;
     }
+    
+    // Remover flag O_NONBLOCK para leitura bloqueante normal
+    int flags = fcntl(registry_fd, F_GETFL);
+    fcntl(registry_fd, F_SETFL, flags & ~O_NONBLOCK);
     
     debug("Registry pipe opened in host thread\n");
     
@@ -358,16 +369,31 @@ void* host_thread(void* arg) {
         char buffer[256];
         ssize_t bytes_read = read(registry_fd, buffer, sizeof(buffer));
         
+        // Verificar se recebemos sinal para parar
+        if (!server_running) {
+            break;
+        }
+        
         if (bytes_read <= 0) {
             if (bytes_read == 0) {
                 // EOF - reabrir pipe
                 close(registry_fd);
-                registry_fd = open(registry_pipe, O_RDONLY);
+                if (!server_running) break;
+                
+                registry_fd = open(registry_pipe, O_RDONLY | O_NONBLOCK);
                 if (registry_fd == -1) {
                     debug("Failed to reopen registry pipe: %s\n", strerror(errno));
-                    sleep_ms(100); // Esperar 100ms antes de tentar novamente
+                    sleep_ms(100);
                     continue;
                 }
+                // Remover O_NONBLOCK
+                flags = fcntl(registry_fd, F_GETFL);
+                fcntl(registry_fd, F_SETFL, flags & ~O_NONBLOCK);
+                continue;
+            }
+            // Erro de leitura - verificar se foi interrompido por sinal
+            if (errno == EINTR) {
+                debug("Read interrupted by signal\n");
                 continue;
             }
             // Erro de leitura - continuar se o servidor ainda estiver a correr
@@ -636,6 +662,12 @@ int main(int argc, char** argv) {
         return 1;
     }
     
+    // Criar pipe de shutdown para interromper threads bloqueadas
+    if (pipe(shutdown_pipe) == -1) {
+        fprintf(stderr, "Erro ao criar pipe de shutdown\n");
+        return 1;
+    }
+    
     // Inicializar debug
     open_debug_file("server_debug.log");
     debug("Starting PacmanIST server (Etapa 1.2)\n");
@@ -736,6 +768,10 @@ int main(int argc, char** argv) {
     }
     
     free(sessions);
+    
+    // Fechar pipe de shutdown
+    close(shutdown_pipe[0]);
+    close(shutdown_pipe[1]);
     
     unlink(registry_pipe);
     

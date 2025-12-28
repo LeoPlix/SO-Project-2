@@ -3,6 +3,7 @@
 
 #include <pthread.h>
 #include <semaphore.h>
+#include <signal.h>
 
 #define MAX_PIPE_PATH_LENGTH 40
 #define MAX_SESSIONS 10
@@ -49,12 +50,13 @@ typedef struct {
     int active; // flag para indicar se o buffer está ativo
 } connection_buffer_t;
 
-extern int server_running;
+extern volatile sig_atomic_t server_running;
 extern char registry_pipe[MAX_PIPE_PATH_LENGTH];
 extern session_t *sessions;
 extern int max_games;
 extern connection_buffer_t conn_buffer;
 extern char levels_dir[256];
+extern int shutdown_pipe[2];
 
 void signal_handler(int signum);
 void send_board_update(session_t *sess);

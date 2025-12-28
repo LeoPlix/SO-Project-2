@@ -7,9 +7,6 @@ Command: S
 Command: S
 Command: S
 Command: S
-Command: S
-Command: S
-Command: D
 Command: D
 Command: D
 Command: D
@@ -17,3 +14,26 @@ Command: D
 Command: D
 Returning receiver thread...
 Command: D
+: S
+Command: S
+Command: D
+Command: W
+Command: D
+Command: W
+Command: S
+Command: S
+Command: S
+Command: S
+Command: S
+Command: S
+Command: S
+Command: S
+Command: S
+Command: S
+Command: D
+Command: D
+Command: D
+Command: D
+Command: A
+Command: A
+Returning receiver thread...
