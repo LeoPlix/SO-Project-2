@@ -15,7 +15,7 @@ SERVER_DIR := $(SRC_DIR)/server
 COMMON_DIR := $(SRC_DIR)/common
 
 # Executáveis
-CLIENT_TARGET := client.bin
+CLIENT_TARGET := client
 SERVER_TARGET := PacmanistServer
 
 # Fontes
