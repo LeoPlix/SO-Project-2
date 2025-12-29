@@ -1,6 +1,7 @@
 # Nivel 1 - Simples
 DIM 16 10
 TEMPO 100
+PAC pacman.p
 MON monstro1.m
 XXXXXXXXXXXXXXXX
 Xoooooooooooooxx

@@ -171,7 +171,8 @@ int load_next_level(session_t *sess) {
         if (entry->d_name[0] == '.') continue;
         char *dot = strrchr(entry->d_name, '.');
         if (dot && strcmp(dot, ".lvl") == 0) {
-            strncpy(level_files[num_levels++], entry->d_name, 255);
+            // CORREÇÃO: Usar snprintf em vez de strncpy para evitar erro de truncation
+            snprintf(level_files[num_levels++], 256, "%s", entry->d_name);
         }
     }
     closedir(level_dir);
@@ -242,10 +243,16 @@ void generate_top5_file() {
 void signal_handler(int signum) {
     if (signum == SIGINT) {
         server_running = 0;
-        char c = 1; write(shutdown_pipe[1], &c, 1);
+        char c = 1; 
+        // CORREÇÃO: Verificar retorno do write (num handler não devemos fazer print complexo em erro)
+        if (write(shutdown_pipe[1], &c, 1) == -1) {
+            // Ignorar erro silenciosamente dentro do signal handler
+        }
     } else if (signum == SIGUSR1) {
         sigusr1_received = 1;
-        debug("SIGUSR1 received\n");
+        // debug usa printf, que não é async-signal-safe, mas para debug simples é "aceitável"
+        // O ideal seria apenas setar a flag.
+        // debug("SIGUSR1 received\n"); 
     }
 }
 
@@ -272,7 +279,12 @@ void send_board_update(session_t *sess) {
         else if (ch == 'M') msg[off++] = 'M';
         else msg[off++] = (b->board[i].has_portal) ? '@' : ((b->board[i].has_dot) ? '.' : ' ');
     }
-    write(sess->notif_fd, msg, off);
+    
+    // CORREÇÃO: Verificar retorno do write
+    if (write(sess->notif_fd, msg, off) == -1) {
+        // Se falhar a escrita, o cliente provavelmente desconectou-se
+        // debug("Failed to send board update\n");
+    }
 }
 
 // --- Threads do Servidor ---
@@ -398,7 +410,12 @@ void* session_handler(void* arg) {
         if (buf[0] == OP_CODE_DISCONNECT) {
             sess->game_active = 0;
             char resp[] = { OP_CODE_DISCONNECT, 0 };
-            write(sess->notif_fd, resp, 2);
+            
+            // CORREÇÃO: Verificar retorno do write
+            if (write(sess->notif_fd, resp, 2) == -1) {
+                perror("Failed to confirm disconnect");
+            }
+
         } else if (buf[0] == OP_CODE_PLAY && sess->board && sess->board->n_pacmans > 0) {
             // Processa movimento manual apenas se não houver movimentos automáticos
             if (sess->board->pacmans[0].n_moves == 0) {

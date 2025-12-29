@@ -53,7 +53,15 @@ int pacman_connect(char const *req_pipe_path, char const *notif_pipe_path, char 
   memcpy(msg + 1 + MAX_PIPE_PATH_LENGTH, notif_pipe_path, MAX_PIPE_PATH_LENGTH);
   memcpy(msg + 1 + MAX_PIPE_PATH_LENGTH * 2, server_pipe_path, MAX_PIPE_PATH_LENGTH);
   
-  write(server_fd, msg, sizeof(msg));
+  // CORREÇÃO 1: Verificar retorno do write
+  if (write(server_fd, msg, sizeof(msg)) == -1) {
+      perror("Failed to write connect message to server");
+      close(server_fd);
+      unlink(req_pipe_path);
+      unlink(notif_pipe_path);
+      return 1;
+  }
+
   close(server_fd);
   
   // Abrir FIFOs para comunicação (ordem correta para evitar deadlock)
@@ -87,7 +95,12 @@ void pacman_play(char command) {
   msg[0] = OP_CODE_PLAY;
   msg[1] = command;
   
-  write(session.req_pipe, msg, 2);
+  // CORREÇÃO 2: Verificar retorno do write
+  // Como a função é void, apenas registamos erro se falhar
+  if (write(session.req_pipe, msg, 2) == -1) {
+      // Se a escrita falhar, provavelmente o pipe quebrou
+      perror("Failed to send play command");
+  }
 }
 
 int pacman_disconnect() {
@@ -98,11 +111,21 @@ int pacman_disconnect() {
   // Enviar pedido de desconexão
   char msg[1];
   msg[0] = OP_CODE_DISCONNECT;
-  write(session.req_pipe, msg, 1);
+  
+  // CORREÇÃO 3: Verificar retorno do write
+  if (write(session.req_pipe, msg, 1) == -1) {
+      perror("Failed to send disconnect");
+      // Mesmo falhando o envio, tentamos limpar os recursos abaixo
+  }
   
   // Aguardar resposta
-  char response[2];
-  read(session.notif_pipe, response, 2);
+  char response[2] = {0}; // Inicializar a zero
+  
+  // CORREÇÃO 4: Verificar retorno do read
+  if (read(session.notif_pipe, response, 2) <= 0) {
+      // Se falhar a leitura ou ler 0 bytes (EOF), assumimos erro
+      // mas continuamos para limpar os pipes locais
+  }
   
   // Fechar pipes
   close(session.req_pipe);
@@ -157,9 +180,15 @@ Board receive_board_update(void) {
   
   // Alocar e ler dados do tabuleiro
   int board_size = board.width * board.height;
-  board.data = malloc(board_size + 1);
-  memcpy(board.data, buffer + offset, board_size);
-  board.data[board_size] = '\0';
+  
+  // Segurança básica: verificar se board_size é razoável antes de malloc
+  if (board_size > 0 && board_size < 8000) { 
+      board.data = malloc(board_size + 1);
+      if (board.data) { // Verificar se malloc não falhou
+        memcpy(board.data, buffer + offset, board_size);
+        board.data[board_size] = '\0';
+      }
+  }
   
   return board;
 }

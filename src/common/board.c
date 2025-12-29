@@ -8,8 +8,6 @@
 #include <stdarg.h>
 #include <pthread.h>
 
-
-
 // Helper private function to find and kill pacman at specific position
 static int find_and_kill_pacman(board_t* board, int new_x, int new_y) {
     for (int p = 0; p < board->n_pacmans; p++) {
@@ -32,8 +30,6 @@ static inline int get_board_index(board_t* board, int x, int y) {
 static inline int is_valid_position(board_t* board, int x, int y) {
     return (x >= 0 && x < board->width) && (y >= 0 && y < board->height); // Inside of the board boundaries
 }
-
-
 
 int move_pacman(board_t* board, int pacman_index, command_t* command) {
     if (pacman_index < 0 || !board->pacmans[pacman_index].alive) {
@@ -174,7 +170,9 @@ int move_ghost_charged(board_t* board, int ghost_index, char direction) {
     int y = ghost->pos_y;
     int new_x = x;
     int new_y = y;
-    int result;
+    
+    // CORREÇÃO: Inicializar result para evitar "maybe-uninitialized" error
+    int result = VALID_MOVE; 
 
     ghost->charged = 0; //uncharge
 
