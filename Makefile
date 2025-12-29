@@ -16,7 +16,7 @@ COMMON_DIR := $(SRC_DIR)/common
 
 # Executáveis
 CLIENT_TARGET := client
-SERVER_TARGET := PacmanistServer
+SERVER_TARGET := PacmanIST
 
 # Fontes
 CLIENT_SRCS := $(CLIENT_DIR)/client_main.c $(CLIENT_DIR)/api.c $(CLIENT_DIR)/debug.c
