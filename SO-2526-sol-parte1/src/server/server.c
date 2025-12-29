@@ -38,8 +38,6 @@ void init_connection_buffer(connection_buffer_t *buffer) {
     
     if (buffer->empty == SEM_FAILED || buffer->full == SEM_FAILED) {
         perror("sem_open failed");
-        // Erro crítico, não é possível continuar
-        fprintf(stderr, "Erro fatal ao criar semáforos do buffer. A terminar.\n");
         exit(1);
     }
     
@@ -510,10 +508,13 @@ void* host_thread(void* arg) {
                 debug("Read interrupted by signal\n");
                 continue;
             }
-            // Erro de leitura - continuar sempre, nunca terminar servidor
-            debug("Error reading from registry pipe: %s, continuing...\n", strerror(errno));
-            sleep_ms(100);
-            continue;
+            // Erro de leitura - continuar se o servidor ainda estiver a correr
+            if (server_running) {
+                debug("Error reading from registry pipe: %s, continuing...\n", strerror(errno));
+                sleep_ms(100);
+                continue;
+            }
+            break;
         }
         
         // Parsear mensagem de conexão
@@ -612,6 +613,7 @@ void* manager_thread(void* arg) {
 }
 
 // Thread da sessão
+// Thread da sessão
 void* session_handler(void* arg) {
     session_t *sess = (session_t*)arg;
     
@@ -654,6 +656,7 @@ void* session_handler(void* arg) {
             } else {
                 debug("Error reading from pipe: %s\n", strerror(errno));
             }
+            // O ciclo quebra aqui, mas o game_active ainda pode ser 1!
             break;
         }
         
@@ -664,7 +667,7 @@ void* session_handler(void* arg) {
         switch (op_code) {
             case OP_CODE_DISCONNECT: {
                 debug("Session %d: Received disconnect request\n", sess->session_id);
-                sess->game_active = 0;
+                sess->game_active = 0; // Aqui já estava correto
                 
                 // Enviar resposta
                 char response[2];
@@ -677,7 +680,7 @@ void* session_handler(void* arg) {
             case OP_CODE_PLAY: {
                 if (bytes_read >= 2) {
                     char command = buffer[1];
-                    debug("Session %d: Received play command: %c\n", sess->session_id, command);
+                    // debug("Session %d: Received play command: %c\n", sess->session_id, command);
                     
                     // Só processar comandos manuais se o Pacman não tiver movimentos automáticos
                     if (sess->board && sess->board->n_pacmans > 0) {
@@ -685,7 +688,7 @@ void* session_handler(void* arg) {
                         
                         // Se o Pacman tem movimentos definidos no ficheiro, ignorar comandos manuais
                         if (board->pacmans[0].n_moves > 0) {
-                            debug("Pacman has automatic moves, ignoring manual command\n");
+                            // debug("Pacman has automatic moves, ignoring manual command\n");
                             break;
                         }
                         
@@ -734,8 +737,16 @@ void* session_handler(void* arg) {
         
         pthread_mutex_unlock(&sess->session_lock);
     }
+
+    // --- CORREÇÃO IMPORTANTE AQUI ---
+    // Garantir que a flag está a 0 para que a update_thread saia do seu loop.
+    // Isto resolve o deadlock quando o cliente faz Ctrl+C ou cai.
+    pthread_mutex_lock(&sess->session_lock);
+    sess->game_active = 0;
+    pthread_mutex_unlock(&sess->session_lock);
+    // --------------------------------
     
-    // Aguardar thread de updates
+    // Agora é seguro esperar, pois o update_sender vai ler game_active=0 e sair.
     pthread_join(sess->update_thread, NULL);
     
     // Cleanup
@@ -754,11 +765,12 @@ void* session_handler(void* arg) {
         sess->board = NULL;
     }
     
+    // Libertar o slot explicitamente
     pthread_mutex_lock(&sess->session_lock);
-    sess->active = 0;
+    sess->active = 0; 
     pthread_mutex_unlock(&sess->session_lock);
     
-    debug("Session %d ended\n", sess->session_id);
+    debug("Session %d ended (Slot freed)\n", sess->session_id);
     
     return NULL;
 }
@@ -827,6 +839,7 @@ int main(int argc, char** argv) {
     // Configurar handlers de sinal
     signal(SIGINT, signal_handler);   // SIGINT (Ctrl+C)
     signal(SIGUSR1, signal_handler);  // SIGUSR1 para gerar top 5
+    signal(SIGPIPE, SIG_IGN);         // Ignorar SIGPIPE (cliente cai)
     
     debug("Starting host thread and manager threads\n");
     
@@ -851,10 +864,18 @@ int main(int argc, char** argv) {
     
     debug("Shutdown signal received, terminating threads\n");
     
-    // CORREÇÃO 3: Ordem de encerramento correta
-    
-    // 1. Sinalizar paragem para acordar threads bloqueadas (sem destruir mutexes)
+    // 1. Sinalizar paragem para acordar threads gestoras
     destroy_connection_buffer(&conn_buffer);
+    
+    // --- CORREÇÃO AQUI ---
+    // Acordar a host_thread que está bloqueada no read()
+    // Abrimos e fechamos o pipe de registo em modo escrita.
+    // Isso envia um EOF para o leitor (host_thread), desbloqueando-o.
+    int dummy_fd = open(registry_pipe, O_WRONLY | O_NONBLOCK);
+    if (dummy_fd != -1) {
+        close(dummy_fd);
+    }
+    // ---------------------
     
     // 2. Aguardar que todas as threads terminem
     pthread_join(host_tid, NULL);
