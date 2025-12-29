@@ -1,20 +1,11 @@
-Starting PacmanIST server (Etapa 1.2)
-Levels dir: levels
-Max games: 2
-Registry pipe: registo.fifo
-Registry FIFO created: registo.fifo
-Starting host thread and manager threads
+Starting server. Max games: 2
 Host thread started
-Registry pipe opened in host thread
-Manager thread 0 started (SIGUSR1 blocked)
-Manager thread 1 started (SIGUSR1 blocked)
-All threads created, server is running
-Connection request received: req=/tmp/1_request notif=/tmp/1_notification
-Connection request inserted into buffer
-Manager 0: Got connection request
-Manager 0: Using session slot 0
-Session 0: Found 2 levels, current level: 0
-Session 0: Loading level level1.lvl (index 0)
+Manager 0 started
+Manager 1 started
+Server running...
+Connect req: /tmp/3_request
+Session 0: Found 2 levels, current: 0
+Session 0: Loading level1.lvl
 DIM = 16 x 10
 TEMPO = 100
 PAC = levels/pacman.p
@@ -33,15 +24,10 @@ Pacman passo: 0
 Pacman Pos = 1 x 1
 Ghost passo: 1
 Ghost Pos = 5 x 8
-Session 0: Restored 0 points in new level
 Session 0 handler started
-Pipes opened successfully
-Connection request received: req=/tmp/3_request notif=/tmp/3_notification
-Connection request inserted into buffer
-Manager 1: Got connection request
-Manager 1: Using session slot 1
-Session 1: Found 2 levels, current level: 0
-Session 1: Loading level level1.lvl (index 0)
+Connect req: /tmp/4_request
+Session 1: Found 2 levels, current: 0
+Session 1: Loading level1.lvl
 DIM = 16 x 10
 TEMPO = 100
 PAC = levels/pacman.p
@@ -60,18 +46,12 @@ Pacman passo: 0
 Pacman Pos = 1 x 1
 Ghost passo: 1
 Ghost Pos = 5 x 8
-Session 1: Restored 0 points in new level
 Session 1 handler started
-Pipes opened successfully
-Client disconnected (EOF)
-Session 1: Cleaning up resources
+Client disconnected or error
 Session 1 ended (Slot freed)
-Connection request received: req=/tmp/4_request notif=/tmp/4_notification
-Connection request inserted into buffer
-Manager 1: Got connection request
-Manager 1: Using session slot 1
-Session 1: Found 2 levels, current level: 0
-Session 1: Loading level level1.lvl (index 0)
+Connect req: /tmp/4_request
+Session 1: Found 2 levels, current: 0
+Session 1: Loading level1.lvl
 DIM = 16 x 10
 TEMPO = 100
 PAC = levels/pacman.p
@@ -90,18 +70,54 @@ Pacman passo: 0
 Pacman Pos = 1 x 1
 Ghost passo: 1
 Ghost Pos = 5 x 8
-Session 1: Restored 0 points in new level
 Session 1 handler started
-Pipes opened successfully
-Client disconnected (EOF)
-Session 1: Cleaning up resources
+Client disconnected or error
 Session 1 ended (Slot freed)
-Client disconnected (EOF)
-Session 0: Cleaning up resources
-Session 0 ended (Slot freed)
-Shutdown signal received, terminating threads
-Host thread ended
-Host thread joined, waiting for managers
-Manager thread 0 ended
-Manager thread 1 ended
-Shutting down server
+Connect req: /tmp/2_request
+Session 1: Found 2 levels, current: 0
+Session 1: Loading level1.lvl
+DIM = 16 x 10
+TEMPO = 100
+PAC = levels/pacman.p
+MON file: levels/monstro1.m
+Line: XXXXXXXXXXXXXXXX
+Line: Xoooooooooooooxx
+Line: XoXXXoXXXXoXXooX
+Line: XoXoooooooooXooX
+Line: XoXoXXXoXXXoXooX
+Line: XoooXoooooXooo@X
+Line: XoXXXoXXXoXXXooX
+Line: XooooooooooooooX
+Line: XooooooooooooooX
+Line: XXXXXXXXXXXXXXXX
+Pacman passo: 0
+Pacman Pos = 1 x 1
+Ghost passo: 1
+Ghost Pos = 5 x 8
+Session 1 handler started
+Client disconnected or error
+Session 1 ended (Slot freed)
+Connect req: /tmp/3_request
+Session 1: Found 2 levels, current: 0
+Session 1: Loading level1.lvl
+DIM = 16 x 10
+TEMPO = 100
+PAC = levels/pacman.p
+MON file: levels/monstro1.m
+Line: XXXXXXXXXXXXXXXX
+Line: Xoooooooooooooxx
+Line: XoXXXoXXXXoXXooX
+Line: XoXoooooooooXooX
+Line: XoXoXXXoXXXoXooX
+Line: XoooXoooooXooo@X
+Line: XoXXXoXXXoXXXooX
+Line: XooooooooooooooX
+Line: XooooooooooooooX
+Line: XXXXXXXXXXXXXXXX
+Pacman passo: 0
+Pacman Pos = 1 x 1
+Ghost passo: 1
+Ghost Pos = 5 x 8
+Session 1 handler started
+Client disconnected or error
+Session 1 ended (Slot freed)
