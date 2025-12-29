@@ -1,12 +1,36 @@
 Starting PacmanIST server (Etapa 1.2)
 Levels dir: ../levels
-Max games: 3
-Registry pipe: /tmp/pacmanist_server
-Registry FIFO created: /tmp/pacmanist_server
+Max games: 2
+Registry pipe: registo.fifo
+Registry FIFO created: registo.fifo
 Starting host thread and manager threads
 Host thread started
-Manager thread 0 started (SIGUSR1 blocked)
-All threads created, server is running
-Manager thread 2 started (SIGUSR1 blocked)
-Manager thread 1 started (SIGUSR1 blocked)
 Registry pipe opened in host thread
+Manager thread 0 started (SIGUSR1 blocked)
+Manager thread 1 started (SIGUSR1 blocked)
+All threads created, server is running
+Connection request received: req=/tmp/1_request notif=/tmp/1_notification
+Connection request inserted into buffer
+Manager 1: Got connection request
+Manager 1: Using session slot 0
+Session 0: Found 2 levels, current level: 0
+Session 0: Loading level level1.lvl (index 0)
+DIM = 16 x 10
+TEMPO = 100
+MON file: ../levels/monstro1.m
+Line: XXXXXXXXXXXXXXXX
+Line: Xoooooooooooooxx
+Line: XoXXXoXXXXoXXooX
+Line: XoXoooooooooXooX
+Line: XoXoXXXoXXXoXooX
+Line: XoooXoooooXooo@X
+Line: XoXXXoXXXoXXXooX
+Line: XooooooooooooooX
+Line: XooooooooooooooX
+Line: XXXXXXXXXXXXXXXX
+Ghost passo: 1
+Ghost Pos = 5 x 8
+Session 0: Restored 0 points in new level
+Session 0 handler started
+Pipes opened successfully
+Client disconnected (EOF)
