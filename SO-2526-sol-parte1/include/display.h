@@ -1,9 +1,9 @@
 #ifndef DISPLAY_H
 #define DISPLAY_H
 
-#include "board.h"
+#include "api.h"
 #include <ncurses.h>
-
+#include <board.h>
 
 #define DRAW_GAME_OVER 0
 #define DRAW_WIN 1
@@ -16,6 +16,10 @@ Potential Structures for ncurses
 
 /*Initialize everything ncurses requires*/
 int terminal_init();
+
+void draw_board_client(Board board);
+
+char* get_board_displayed(board_t* board);
 
 /*Draw the board on the screen*/
 void draw_board(board_t* board, int mode);
@@ -39,5 +43,7 @@ void refresh_screen();
 char get_input();
 
 void terminal_cleanup();
+
+void set_timeout(int tempo_ms);
 
 #endif
