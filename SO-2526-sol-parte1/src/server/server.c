@@ -38,20 +38,32 @@ void init_connection_buffer(connection_buffer_t *buffer) {
     
     if (buffer->empty == SEM_FAILED || buffer->full == SEM_FAILED) {
         perror("sem_open failed");
+        // Erro crítico, não é possível continuar
+        fprintf(stderr, "Erro fatal ao criar semáforos do buffer. A terminar.\n");
         exit(1);
     }
     
     pthread_mutex_init(&buffer->mutex, NULL);
 }
 
-// Destruir buffer produtor-consumidor
+// CORREÇÃO 1: Apenas sinaliza o encerramento, NÃO destrói recursos ainda
 void destroy_connection_buffer(connection_buffer_t *buffer) {
+    pthread_mutex_lock(&buffer->mutex);
     buffer->active = 0;
+    pthread_mutex_unlock(&buffer->mutex);
     
     // Desbloquear semáforos para acordar threads bloqueadas
     if (buffer->empty != SEM_FAILED) {
         sem_post(buffer->empty);
+    }
+    if (buffer->full != SEM_FAILED) {
         sem_post(buffer->full);
+    }
+}
+
+// CORREÇÃO 2: Nova função para destruir recursos (chamar apenas APÓS os pthread_join)
+void cleanup_connection_resources(connection_buffer_t *buffer) {
+    if (buffer->empty != SEM_FAILED) {
         sem_close(buffer->empty);
         sem_unlink("/pacmanist_empty");
     }
@@ -64,11 +76,17 @@ void destroy_connection_buffer(connection_buffer_t *buffer) {
 
 // Inserir pedido no buffer (produtor)
 void buffer_insert(connection_buffer_t *buffer, connection_request_t *request) {
-    if (!buffer->active) return;
+    pthread_mutex_lock(&buffer->mutex);
+    int is_active = buffer->active;
+    pthread_mutex_unlock(&buffer->mutex);
+    if (!is_active) return;
     
     sem_wait(buffer->empty);
     
-    if (!buffer->active) {
+    pthread_mutex_lock(&buffer->mutex);
+    int is_active2 = buffer->active;
+    pthread_mutex_unlock(&buffer->mutex);
+    if (!is_active2) {
         sem_post(buffer->empty);
         return;
     }
@@ -84,12 +102,18 @@ void buffer_insert(connection_buffer_t *buffer, connection_request_t *request) {
 
 // Remover pedido do buffer (consumidor)
 int buffer_remove(connection_buffer_t *buffer, connection_request_t *request) {
-    if (!buffer->active) return -1;
+    pthread_mutex_lock(&buffer->mutex);
+    int is_active = buffer->active;
+    pthread_mutex_unlock(&buffer->mutex);
+    if (!is_active) return -1;
     
     // macOS não tem sem_timedwait, usar sem_trywait com sleep
     int attempts = 0;
     while (attempts < 10) {
-        if (!buffer->active) return -1;
+        pthread_mutex_lock(&buffer->mutex);
+        int is_active2 = buffer->active;
+        pthread_mutex_unlock(&buffer->mutex);
+        if (!is_active2) return -1;
         
         if (sem_trywait(buffer->full) == 0) {
             break;
@@ -107,7 +131,10 @@ int buffer_remove(connection_buffer_t *buffer, connection_request_t *request) {
         return -1; // timeout
     }
     
-    if (!buffer->active) {
+    pthread_mutex_lock(&buffer->mutex);
+    int is_active3 = buffer->active;
+    pthread_mutex_unlock(&buffer->mutex);
+    if (!is_active3) {
         sem_post(buffer->full);
         return -1;
     }
@@ -483,13 +510,10 @@ void* host_thread(void* arg) {
                 debug("Read interrupted by signal\n");
                 continue;
             }
-            // Erro de leitura - continuar se o servidor ainda estiver a correr
-            if (server_running) {
-                debug("Error reading from registry pipe: %s, continuing...\n", strerror(errno));
-                sleep_ms(100);
-                continue;
-            }
-            break;
+            // Erro de leitura - continuar sempre, nunca terminar servidor
+            debug("Error reading from registry pipe: %s, continuing...\n", strerror(errno));
+            sleep_ms(100);
+            continue;
         }
         
         // Parsear mensagem de conexão
@@ -827,22 +851,26 @@ int main(int argc, char** argv) {
     
     debug("Shutdown signal received, terminating threads\n");
     
-    // Desativar buffer para acordar threads bloqueadas
+    // CORREÇÃO 3: Ordem de encerramento correta
+    
+    // 1. Sinalizar paragem para acordar threads bloqueadas (sem destruir mutexes)
     destroy_connection_buffer(&conn_buffer);
     
-    // Aguardar thread anfitriã
+    // 2. Aguardar que todas as threads terminem
     pthread_join(host_tid, NULL);
     
     debug("Host thread joined, waiting for managers\n");
     
-    // Aguardar threads gestoras
     for (int i = 0; i < max_games; i++) {
         pthread_join(manager_tids[i], NULL);
     }
     
     free(manager_tids);
     
-    // Cleanup
+    // 3. Agora sim, destruir os recursos do buffer
+    cleanup_connection_resources(&conn_buffer);
+    
+    // Cleanup final
     debug("Shutting down server\n");
     
     // Limpar todas as sessões

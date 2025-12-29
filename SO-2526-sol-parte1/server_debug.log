@@ -1,5 +1,5 @@
 Starting PacmanIST server (Etapa 1.2)
-Levels dir: ../levels
+Levels dir: levels
 Max games: 2
 Registry pipe: registo.fifo
 Registry FIFO created: registo.fifo
@@ -17,7 +17,8 @@ Session 0: Found 2 levels, current level: 0
 Session 0: Loading level level1.lvl (index 0)
 DIM = 16 x 10
 TEMPO = 100
-MON file: ../levels/monstro1.m
+PAC = levels/pacman.p
+MON file: levels/monstro1.m
 Line: XXXXXXXXXXXXXXXX
 Line: Xoooooooooooooxx
 Line: XoXXXoXXXXoXXooX
@@ -28,6 +29,8 @@ Line: XoXXXoXXXoXXXooX
 Line: XooooooooooooooX
 Line: XooooooooooooooX
 Line: XXXXXXXXXXXXXXXX
+Pacman passo: 0
+Pacman Pos = 1 x 1
 Ghost passo: 1
 Ghost Pos = 5 x 8
 Session 0: Restored 0 points in new level
