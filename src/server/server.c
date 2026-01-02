@@ -39,25 +39,50 @@ void free_session_resources(session_t *sess) {
 }
 
 // Retorna 1 se o jogo continua, 0 se o jogo deve parar
+// Retorna 2 se passou de nível (requer restart da update_thread)
+// IMPORTANTE: Para REACHED_PORTAL, update_sender já deve estar parada ANTES de chamar
 int handle_move_result(session_t *sess, int result) {
     if (result == REACHED_PORTAL) {
         debug("Session %d: Pacman reached portal!\n", sess->session_id);
+        
+        // update_sender JÁ foi parada pelo caller
+        // Agora é seguro modificar o board
+        pthread_mutex_lock(&sess->session_lock);
         sess->current_level++;
         
         if (load_next_level(sess) != 0) {
             sess->victory = 1;
+            pthread_mutex_unlock(&sess->session_lock);
             send_board_update(sess);
+            pthread_mutex_lock(&sess->session_lock);
             sess->game_active = 0;
+            pthread_mutex_unlock(&sess->session_lock);
             return 0; 
         }
+        
+        sess->game_active = 1;  // Reativa o jogo
+        pthread_mutex_unlock(&sess->session_lock);
+        
         send_board_update(sess);
-        return 1;
+        
+        // Restart update_sender thread
+        if (pthread_create(&sess->update_thread, NULL, update_sender, sess) != 0) {
+            debug("Session %d: Failed to restart update thread\n", sess->session_id);
+            pthread_mutex_lock(&sess->session_lock);
+            sess->game_active = 0;
+            pthread_mutex_unlock(&sess->session_lock);
+            return 0;
+        }
+        
+        return 2; // Indica que passou de nível
     } 
     
     if (result == DEAD_PACMAN) {
         debug("Session %d: Pacman died!\n", sess->session_id);
         send_board_update(sess); 
+        pthread_mutex_lock(&sess->session_lock);
         sess->game_active = 0;
+        pthread_mutex_unlock(&sess->session_lock);
         return 0;
     }
     
@@ -177,7 +202,13 @@ int load_next_level(session_t *sess) {
 
     // Recarregar board
     if (sess->board) unload_level(sess->board);
-    else sess->board = malloc(sizeof(board_t));
+    else {
+        sess->board = malloc(sizeof(board_t));
+        if (!sess->board) {
+            debug("Session %d: Failed to allocate board memory\n", sess->session_id);
+            return -1;
+        }
+    }
 
     debug("Session %d: Loading %s\n", sess->session_id, level_files[sess->current_level]);
     if (load_level(sess->board, level_files[sess->current_level], levels_dir, 0) != 0) return -1;
@@ -281,21 +312,8 @@ void* update_sender(void* arg) {
             board_t *b = sess->board;
             pthread_rwlock_wrlock(&b->state_lock);
             
-            // Movimento automático Pacman
-            if (b->n_pacmans > 0 && b->pacmans[0].n_moves > 0 && b->pacmans[0].alive) {
-                int res = move_pacman(b, 0, &b->pacmans[0].moves[b->pacmans[0].current_move % b->pacmans[0].n_moves]);
-                
-                // Unlock antes de processar resultado 
-                pthread_rwlock_unlock(&b->state_lock); 
-                
-                if (!handle_move_result(sess, res)) {
-                    pthread_mutex_unlock(&sess->session_lock);
-                    continue; 
-                }
-                
-                // Relock para os monstros
-                pthread_rwlock_wrlock(&b->state_lock); 
-            }
+            // Pacman é controlado exclusivamente pelo cliente via named pipe
+            // Não há movimentos automáticos na segunda parte do projeto
 
             // Movimento Monstros
             for (int i = 0; i < b->n_ghosts; i++) {
@@ -378,7 +396,14 @@ void* session_handler(void* arg) {
     send_board_update(sess);
     pthread_mutex_unlock(&sess->session_lock);
     
-    pthread_create(&sess->update_thread, NULL, update_sender, sess);
+    if (pthread_create(&sess->update_thread, NULL, update_sender, sess) != 0) {
+        debug("Session %d: Failed to create update thread\n", sess->session_id);
+        sess->game_active = 0;
+        close(sess->req_fd);
+        close(sess->notif_fd);
+        sess->active = 0;
+        return NULL;
+    }
 
     char buf[256];
     while (sess->game_active) {
@@ -395,23 +420,53 @@ void* session_handler(void* arg) {
             if (write(sess->notif_fd, resp, 2) == -1) {
                 perror("Failed to confirm disconnect");
             }
+            pthread_mutex_unlock(&sess->session_lock);
 
         } else if (buf[0] == OP_CODE_PLAY && sess->board && sess->board->n_pacmans > 0) {
-            // Processa movimento manual apenas se não houver movimentos automáticos
-            if (sess->board->pacmans[0].n_moves == 0) {
-                command_t cmd = { .command = buf[1], .turns = 1, .turns_left = 1 };
-                
-                pthread_rwlock_wrlock(&sess->board->state_lock);
-                int res = move_pacman(sess->board, 0, &cmd);
-                pthread_rwlock_unlock(&sess->board->state_lock);
+            // Processa movimento do cliente recebido via named pipe
+            command_t cmd = { .command = buf[1], .turns = 1, .turns_left = 1 };
+            
+            board_t *current_board = sess->board;  // Guarda referência local
+            
+            pthread_rwlock_wrlock(&current_board->state_lock);
+            int res = move_pacman(current_board, 0, &cmd);
+            pthread_rwlock_unlock(&current_board->state_lock);
 
-                // Usa a função centralizada para verificar vitória/derrota
-                if (handle_move_result(sess, res)) {
-                    send_board_update(sess);
+            // Liberta session_lock ANTES de handle_move_result
+            pthread_mutex_unlock(&sess->session_lock);
+            
+            // Checa se atingiu portal - precisa parar tudo antes de destruir board
+            if (res == REACHED_PORTAL) {
+                // Para update_sender ANTES de qualquer outra operação
+                pthread_mutex_lock(&sess->session_lock);
+                sess->game_active = 0;
+                pthread_mutex_unlock(&sess->session_lock);
+                
+                pthread_join(sess->update_thread, NULL);
+                
+                // Agora processa a mudança de nível
+                int move_result = handle_move_result(sess, res);
+                if (move_result == 2) {
+                    // Passou de nível, tudo já foi tratado
                 }
+                continue;
             }
+            
+            // Processar outros resultados normalmente
+            int move_result = handle_move_result(sess, res);
+            if (move_result == 1) {
+                // Jogo continua normalmente
+                pthread_mutex_lock(&sess->session_lock);
+                send_board_update(sess);
+                pthread_mutex_unlock(&sess->session_lock);
+            }
+            // Se move_result == 0, jogo terminou
+            continue;
+        } else {
+            // Opcode desconhecido - ignora mas não termina o servidor
+            debug("Session %d: Unknown opcode %d - ignoring\n", sess->session_id, buf[0]);
+            pthread_mutex_unlock(&sess->session_lock);
         }
-        pthread_mutex_unlock(&sess->session_lock);
     }
 
     pthread_mutex_lock(&sess->session_lock);
@@ -501,6 +556,10 @@ int main(int argc, char** argv) {
     debug("Starting server. Max games: %d\n", max_games);
 
     sessions = calloc(max_games, sizeof(session_t));
+    if (!sessions) {
+        fprintf(stderr, "Failed to allocate memory for sessions\n");
+        return 1;
+    }
     for(int i=0; i<max_games; i++) { 
         sessions[i].req_fd = sessions[i].notif_fd = -1; 
         pthread_mutex_init(&sessions[i].session_lock, NULL); 
@@ -518,10 +577,30 @@ int main(int argc, char** argv) {
 
     // Threads
     pthread_t host_tid, *mgr_tids = malloc(max_games * sizeof(pthread_t));
-    pthread_create(&host_tid, NULL, host_thread, NULL);
+    if (!mgr_tids) {
+        fprintf(stderr, "Failed to allocate memory for manager threads\n");
+        free(sessions);
+        return 1;
+    }
+    
+    if (pthread_create(&host_tid, NULL, host_thread, NULL) != 0) {
+        fprintf(stderr, "Failed to create host thread\n");
+        free(mgr_tids);
+        free(sessions);
+        return 1;
+    }
+    
     for(int i=0; i<max_games; i++) {
-        int *id = malloc(sizeof(int)); *id = i; 
-        pthread_create(&mgr_tids[i], NULL, manager_thread, id);
+        int *id = malloc(sizeof(int));
+        if (!id) {
+            fprintf(stderr, "Failed to allocate memory for thread id\n");
+            continue; // Tenta criar as outras threads
+        }
+        *id = i;
+        if (pthread_create(&mgr_tids[i], NULL, manager_thread, id) != 0) {
+            fprintf(stderr, "Failed to create manager thread %d\n", i);
+            free(id);
+        }
     }
 
     debug("Server running...\n");

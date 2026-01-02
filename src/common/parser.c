@@ -194,43 +194,11 @@ int read_pacman(board_t* board, int points) {
         }
     }
 
-    // end of the file contains the moves
+    // Segundo enunciado parte 2: ficheiro .p serve apenas para configuração (POS e PASSO)
+    // Os comandos vêm exclusivamente via named pipe do cliente
+    // Ignorar quaisquer comandos que possam existir no ficheiro
     pacman->current_move = 0;
-    
-    // command here still holds the previous line
-    int move = 0;
-    while (read > 0 && move < MAX_MOVES) {
-        if (command[0]== '#' || command[0] == '\0') continue;
-        if (command[0] == 'A' ||
-            command[0] == 'D' ||
-            command[0] == 'W' ||
-            command[0] == 'S' ||
-            command[0] == 'R' ||
-            command[0] == 'G' ||  // FIXME: so para testar
-            command[0] == 'Q') {  // FIXME: so para testar
-                pacman->moves[move].command = command[0];
-                pacman->moves[move].turns = 1;
-                move += 1;
-        }
-        else if (command[0] == 'T' && command[1] == ' ') { 
-            int t = atoi(command+2);
-            if (t > 0) {
-                pacman->moves[move].command = command[0];
-                pacman->moves[move].turns = t;
-                pacman->moves[move].turns_left = t;
-                move += 1;
-            }
-        }
-
-        read = read_line(fd, command);
-    }
-    pacman->n_moves = move;
-
-    if (read == -1) {
-        debug("Failed reading line\n");
-        close(fd);
-        return -1;
-    }
+    pacman->n_moves = 0;  // Modo controlado pelo cliente (sem movimentos automáticos)
 
     close(fd);
     return 0;
