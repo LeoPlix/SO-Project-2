@@ -82,6 +82,18 @@ int pacman_connect(char const *req_pipe_path, char const *notif_pipe_path, char 
     return 1;
   }
   
+  // ESPERAR pela mensagem de confirmação do servidor
+  // O cliente fica bloqueado aqui até o servidor ter um slot disponível
+  char confirmation[2];
+  ssize_t bytes_read = read(session.notif_pipe, confirmation, 2);
+  if (bytes_read != 2 || confirmation[0] != OP_CODE_CONNECT) {
+    close(session.req_pipe);
+    close(session.notif_pipe);
+    unlink(req_pipe_path);
+    unlink(notif_pipe_path);
+    return 1;
+  }
+  
   return 0;
 }
 
