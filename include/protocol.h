@@ -1,7 +1,7 @@
-#define MAX_PIPE_PATH_LENGTH 40
-
 #ifndef PROTOCOL_H
 #define PROTOCOL_H
+
+#define MAX_PIPE_PATH_LENGTH 256
 
 enum {
   OP_CODE_CONNECT = 1,

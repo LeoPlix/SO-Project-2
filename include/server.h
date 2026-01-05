@@ -5,17 +5,9 @@
 #include <semaphore.h>
 #include <signal.h>
 #include "board.h" 
+#include "protocol.h"
 
-#define MAX_PIPE_PATH_LENGTH 40
 #define BUFFER_SIZE 10
-#define MAX_SESSIONS 10 
-
-enum {
-    OP_CODE_CONNECT = 1,
-    OP_CODE_DISCONNECT = 2,
-    OP_CODE_PLAY = 3,
-    OP_CODE_BOARD = 4,
-};
 
 // Estrutura da sessão
 typedef struct {

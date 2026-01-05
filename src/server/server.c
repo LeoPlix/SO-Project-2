@@ -220,7 +220,7 @@ int compare_scores(const void *a, const void *b) {
 
 void generate_top5_file() {
     debug("Generating top 5 clients file...\n");
-    struct score_entry scores[MAX_SESSIONS];
+    struct score_entry scores[max_games];
     int num = 0;
 
     for (int i = 0; i < max_games; i++) {
@@ -344,7 +344,7 @@ void* host_thread(void* arg) {
     while (server_running) {
         if (sigusr1_received) { sigusr1_received = 0; generate_top5_file(); }
         
-        char buf[256];
+        char buf[1 + MAX_PIPE_PATH_LENGTH * 3];
         ssize_t n = read(reg_fd, buf, sizeof(buf));
         if (!server_running) break;
 
