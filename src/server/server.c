@@ -336,7 +336,7 @@ void* host_thread(void* arg) {
     (void)arg;
     debug("Host thread started\n");
     
-    int reg_fd = open(registry_pipe, O_RDONLY | O_NONBLOCK);
+    int reg_fd = open(registry_pipe, O_RDWR | O_NONBLOCK);
     if (reg_fd == -1) { debug("Failed to open registry\n"); return NULL; }
     
     fcntl(reg_fd, F_SETFL, fcntl(reg_fd, F_GETFL) & ~O_NONBLOCK);
@@ -351,7 +351,7 @@ void* host_thread(void* arg) {
         if (n <= 0) {
             if (n == 0) { // EOF - reabrir
                 close(reg_fd);
-                reg_fd = open(registry_pipe, O_RDONLY | O_NONBLOCK);
+                reg_fd = open(registry_pipe, O_RDWR | O_NONBLOCK);
                 if (reg_fd != -1) fcntl(reg_fd, F_SETFL, fcntl(reg_fd, F_GETFL) & ~O_NONBLOCK);
                 else sleep_ms(100);
             } else if (errno != EINTR) {
@@ -380,11 +380,11 @@ void* session_handler(void* arg) {
     session_t *sess = (session_t*)arg;
     debug("Session %d handler started\n", sess->session_id);
     
-    if ((sess->req_fd = open(sess->req_pipe_path, O_RDONLY)) == -1) { 
-        sess->active = 0; return NULL; 
-    }
-    if ((sess->notif_fd = open(sess->notif_pipe_path, O_WRONLY)) == -1) { 
-        close(sess->req_fd); sess->active = 0; return NULL; 
+    // Os pipes já foram abertos pelo session_manager, apenas verificar
+    if (sess->req_fd == -1 || sess->notif_fd == -1) {
+        debug("Session %d: Pipes not properly opened\n", sess->session_id);
+        sess->active = 0; 
+        return NULL;
     }
 
     pthread_mutex_lock(&sess->session_lock);
@@ -503,13 +503,56 @@ void* manager_thread(void* arg) {
             pthread_mutex_unlock(&sessions[i].session_lock);
         }
 
-        if (sess_id == -1) { debug("Manager %d: No slots\n", id); continue; }
+        if (sess_id == -1) { 
+            debug("Manager %d: No slots available, putting request back\n", id);
+            // Colocar pedido de volta no buffer para reprocessar quando houver slot
+            buffer_insert(&conn_buffer, &req);
+            sleep(1); // Esperar 1 segundo antes de tentar novamente
+            continue;
+        }
         
         session_t *sess = &sessions[sess_id];
+        
+        // Abrir pipes ANTES de enviar confirmação (evita deadlock)
+        sess->req_fd = open(req.req_pipe_path, O_RDONLY);
+        if (sess->req_fd == -1) {
+            debug("Manager %d: Failed to open req_pipe\n", id);
+            pthread_mutex_lock(&sess->session_lock);
+            sess->active = 0;
+            pthread_mutex_unlock(&sess->session_lock);
+            continue;
+        }
+        
+        sess->notif_fd = open(req.notif_pipe_path, O_WRONLY);
+        if (sess->notif_fd == -1) {
+            debug("Manager %d: Failed to open notif_pipe\n", id);
+            close(sess->req_fd);
+            pthread_mutex_lock(&sess->session_lock);
+            sess->active = 0;
+            pthread_mutex_unlock(&sess->session_lock);
+            continue;
+        }
+        
+        // Agora enviar mensagem de confirmação ao cliente
+        char confirm_msg[2] = { OP_CODE_CONNECT, 0 };
+        if (write(sess->notif_fd, confirm_msg, 2) == -1) {
+            perror("Failed to send confirmation");
+            close(sess->req_fd);
+            close(sess->notif_fd);
+            pthread_mutex_lock(&sess->session_lock);
+            sess->active = 0;
+            pthread_mutex_unlock(&sess->session_lock);
+            continue;
+        }
+        
         sess->board = NULL;
         
         if (load_next_level(sess) != 0) {
-            pthread_mutex_lock(&sess->session_lock); sess->active = 0; pthread_mutex_unlock(&sess->session_lock);
+            close(sess->req_fd);
+            close(sess->notif_fd);
+            pthread_mutex_lock(&sess->session_lock); 
+            sess->active = 0; 
+            pthread_mutex_unlock(&sess->session_lock);
             continue;
         }
         
