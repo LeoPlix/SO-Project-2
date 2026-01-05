@@ -13,6 +13,10 @@
 #include <pthread.h>
 #include <signal.h>
 
+// =============================================================================
+// 1. GLOBAIS E ESTADO
+// =============================================================================
+
 // Global
 session_t *sessions = NULL; // Active sessions
 int max_games = 0;
@@ -23,69 +27,13 @@ char registry_pipe[MAX_PIPE_PATH_LENGTH];
 char levels_dir[256];
 int shutdown_pipe[2]; 
 
+// Forward declarations (necessário para funções que se chamam mutuamente)
 void send_board_update(session_t *sess);
 int load_next_level(session_t *sess);
+void* update_sender(void* arg);
 
-// Liberta recursos internos de uma sessão (pipes, memória do tabuleiro)
-void free_session_resources(session_t *sess) {
-    if (sess->req_fd != -1) { close(sess->req_fd); sess->req_fd = -1; }
-    if (sess->notif_fd != -1) { close(sess->notif_fd); sess->notif_fd = -1; }
-    if (sess->board != NULL) {
-        unload_level(sess->board);
-        free(sess->board);
-        sess->board = NULL;
-    }
-    sess->game_active = 0; 
-}
-
-// Retorna 1 se o jogo continua, 0 se o jogo deve parar
-// Retorna 2 se passou de nível (requer restart da update_thread)
-int handle_move_result(session_t *sess, int result) {
-    if (result == REACHED_PORTAL) {
-        debug("Session %d: Pacman reached portal!\n", sess->session_id);
-        
-        // update_sender JÁ foi parada pelo caller
-        pthread_mutex_lock(&sess->session_lock);
-        sess->current_level++;
-        
-        if (load_next_level(sess) != 0) {
-            sess->victory = 1;
-            pthread_mutex_unlock(&sess->session_lock);
-            send_board_update(sess);
-            pthread_mutex_lock(&sess->session_lock);
-            sess->game_active = 0;
-            pthread_mutex_unlock(&sess->session_lock);
-            return 0; 
-        }
-        
-        sess->game_active = 1;  // Reativa o jogo
-        pthread_mutex_unlock(&sess->session_lock);
-        
-        send_board_update(sess);
-        
-        // Restart update_sender thread
-        if (pthread_create(&sess->update_thread, NULL, update_sender, sess) != 0) {
-            debug("Session %d: Failed to restart update thread\n", sess->session_id);
-            pthread_mutex_lock(&sess->session_lock);
-            sess->game_active = 0;
-            pthread_mutex_unlock(&sess->session_lock);
-            return 0;
-        }
-        
-        return 2; // Indica que passou de nível
-    } 
-    
-    if (result == DEAD_PACMAN) {
-        debug("Session %d: Pacman died!\n", sess->session_id);
-        send_board_update(sess); 
-        pthread_mutex_lock(&sess->session_lock);
-        sess->game_active = 0;
-        pthread_mutex_unlock(&sess->session_lock);
-        return 0;
-    }
-    
-    return 1;
-}
+// ===============================================
+// 2. GESTÃO DE BUFFER DE CONEXÃO (Infraestrutura)
 
 // Gestão de buffer de conexão
 void init_connection_buffer(connection_buffer_t *buffer) {
@@ -159,8 +107,22 @@ int buffer_remove(connection_buffer_t *buffer, connection_request_t *request) {
     return -1;
 }
 
-// Níveis e ficheiros
+// =========================================
+// 3. NÍVEIS, RECURSOS E PONTUAÇÃO (Helpers)
 
+// Liberta recursos internos de uma sessão (pipes, memória do tabuleiro)
+void free_session_resources(session_t *sess) {
+    if (sess->req_fd != -1) { close(sess->req_fd); sess->req_fd = -1; }
+    if (sess->notif_fd != -1) { close(sess->notif_fd); sess->notif_fd = -1; }
+    if (sess->board != NULL) {
+        unload_level(sess->board);
+        free(sess->board);
+        sess->board = NULL;
+    }
+    sess->game_active = 0; 
+}
+
+// Níveis e ficheiros
 int load_next_level(session_t *sess) {
     DIR* level_dir = opendir(levels_dir);
     if (!level_dir) {
@@ -250,15 +212,8 @@ void generate_top5_file() {
     }
 }
 
-void signal_handler(int signum) {
-    if (signum == SIGINT) {
-        server_running = 0;
-        char c = 1; 
-        if (write(shutdown_pipe[1], &c, 1) == -1) {} // Ignorar erro
-    } else if (signum == SIGUSR1) {
-        sigusr1_received = 1;
-    }
-}
+// ==========================
+// LÓGICA DO JOGO E PROTOCOLO
 
 void send_board_update(session_t *sess) {
     if (!sess->board || sess->notif_fd == -1) return;
@@ -300,7 +255,58 @@ void send_board_update(session_t *sess) {
     if (write(sess->notif_fd, msg, off) == -1) {}
 }
 
-// Threads
+// Retorna 1 se o jogo continua, 0 se o jogo deve parar
+// Retorna 2 se passou de nível (requer restart da update_thread)
+int handle_move_result(session_t *sess, int result) {
+    if (result == REACHED_PORTAL) {
+        debug("Session %d: Pacman reached portal!\n", sess->session_id);
+        
+        // update_sender JÁ foi parada pelo caller
+        pthread_mutex_lock(&sess->session_lock);
+        sess->current_level++;
+        
+        if (load_next_level(sess) != 0) {
+            sess->victory = 1;
+            pthread_mutex_unlock(&sess->session_lock);
+            send_board_update(sess);
+            pthread_mutex_lock(&sess->session_lock);
+            sess->game_active = 0;
+            pthread_mutex_unlock(&sess->session_lock);
+            return 0; 
+        }
+        
+        sess->game_active = 1;  // Reativa o jogo
+        pthread_mutex_unlock(&sess->session_lock);
+        
+        send_board_update(sess);
+        
+        // Restart update_sender thread
+        if (pthread_create(&sess->update_thread, NULL, update_sender, sess) != 0) {
+            debug("Session %d: Failed to restart update thread\n", sess->session_id);
+            pthread_mutex_lock(&sess->session_lock);
+            sess->game_active = 0;
+            pthread_mutex_unlock(&sess->session_lock);
+            return 0;
+        }
+        
+        return 2; // Indica que passou de nível
+    } 
+    
+    if (result == DEAD_PACMAN) {
+        debug("Session %d: Pacman died!\n", sess->session_id);
+        send_board_update(sess); 
+        pthread_mutex_lock(&sess->session_lock);
+        sess->game_active = 0;
+        pthread_mutex_unlock(&sess->session_lock);
+        return 0;
+    }
+    
+    return 1;
+}
+
+// ============================
+// THREADS (Lógica de Execução)
+
 void* update_sender(void* arg) {
     session_t *sess = (session_t*)arg;
     while (sess->game_active) {
@@ -328,50 +334,6 @@ void* update_sender(void* arg) {
         }
         pthread_mutex_unlock(&sess->session_lock);
     }
-    return NULL;
-}
-
-// Recebe e prepara um novo pedido de ligação de cliente
-void* host_thread(void* arg) {
-    (void)arg;
-    debug("Host thread started\n");
-    
-    int reg_fd = open(registry_pipe, O_RDWR | O_NONBLOCK);
-    if (reg_fd == -1) { debug("Failed to open registry\n"); return NULL; }
-    
-    fcntl(reg_fd, F_SETFL, fcntl(reg_fd, F_GETFL) & ~O_NONBLOCK);
-
-    while (server_running) {
-        if (sigusr1_received) { sigusr1_received = 0; generate_top5_file(); }
-        
-        char buf[1 + MAX_PIPE_PATH_LENGTH * 3];
-        ssize_t n = read(reg_fd, buf, sizeof(buf));
-        if (!server_running) break;
-
-        if (n <= 0) {
-            if (n == 0) { // EOF - reabrir
-                close(reg_fd);
-                reg_fd = open(registry_pipe, O_RDWR | O_NONBLOCK);
-                if (reg_fd != -1) fcntl(reg_fd, F_SETFL, fcntl(reg_fd, F_GETFL) & ~O_NONBLOCK);
-                else sleep_ms(100);
-            } else if (errno != EINTR) {
-                sleep_ms(100);
-            }
-            continue;
-        }
-
-        if (buf[0] == OP_CODE_CONNECT) {
-            connection_request_t req;
-            memcpy(req.req_pipe_path, buf + 1, MAX_PIPE_PATH_LENGTH);
-            memcpy(req.notif_pipe_path, buf + 1 + MAX_PIPE_PATH_LENGTH, MAX_PIPE_PATH_LENGTH);
-            req.req_pipe_path[MAX_PIPE_PATH_LENGTH-1] = req.notif_pipe_path[MAX_PIPE_PATH_LENGTH-1] = '\0';
-            
-            debug("Connect req: %s\n", req.req_pipe_path);
-            buffer_insert(&conn_buffer, &req);
-        }
-    }
-    close(reg_fd);
-    debug("Host thread ended\n");
     return NULL;
 }
 
@@ -562,7 +524,63 @@ void* manager_thread(void* arg) {
     return NULL;
 }
 
-// Main
+// Recebe e prepara um novo pedido de ligação de cliente
+void* host_thread(void* arg) {
+    (void)arg;
+    debug("Host thread started\n");
+    
+    int reg_fd = open(registry_pipe, O_RDWR | O_NONBLOCK);
+    if (reg_fd == -1) { debug("Failed to open registry\n"); return NULL; }
+    
+    fcntl(reg_fd, F_SETFL, fcntl(reg_fd, F_GETFL) & ~O_NONBLOCK);
+
+    while (server_running) {
+        if (sigusr1_received) { sigusr1_received = 0; generate_top5_file(); }
+        
+        char buf[1 + MAX_PIPE_PATH_LENGTH * 3];
+        ssize_t n = read(reg_fd, buf, sizeof(buf));
+        if (!server_running) break;
+
+        if (n <= 0) {
+            if (n == 0) { // EOF - reabrir
+                close(reg_fd);
+                reg_fd = open(registry_pipe, O_RDWR | O_NONBLOCK);
+                if (reg_fd != -1) fcntl(reg_fd, F_SETFL, fcntl(reg_fd, F_GETFL) & ~O_NONBLOCK);
+                else sleep_ms(100);
+            } else if (errno != EINTR) {
+                sleep_ms(100);
+            }
+            continue;
+        }
+
+        if (buf[0] == OP_CODE_CONNECT) {
+            connection_request_t req;
+            memcpy(req.req_pipe_path, buf + 1, MAX_PIPE_PATH_LENGTH);
+            memcpy(req.notif_pipe_path, buf + 1 + MAX_PIPE_PATH_LENGTH, MAX_PIPE_PATH_LENGTH);
+            req.req_pipe_path[MAX_PIPE_PATH_LENGTH-1] = req.notif_pipe_path[MAX_PIPE_PATH_LENGTH-1] = '\0';
+            
+            debug("Connect req: %s\n", req.req_pipe_path);
+            buffer_insert(&conn_buffer, &req);
+        }
+    }
+    close(reg_fd);
+    debug("Host thread ended\n");
+    return NULL;
+}
+
+// ==================================================
+// MAIN E GESTÃO DE SINAIS (Ponto de Entrada e Saída)
+
+void signal_handler(int signum) {
+    if (signum == SIGINT) {
+        server_running = 0;
+        char c = 1; 
+        if (write(shutdown_pipe[1], &c, 1) == -1) {} // Ignorar erro
+    } else if (signum == SIGUSR1) {
+        sigusr1_received = 1;
+    }
+}
+
 int main(int argc, char** argv) {
     if (argc != 4) { fprintf(stderr, "Usage: %s <levels> <max_games> <fifo>\n", argv[0]); return 1; }
     
