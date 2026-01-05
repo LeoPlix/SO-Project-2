@@ -24,16 +24,6 @@ char* get_board_displayed(board_t* board);
 /*Draw the board on the screen*/
 void draw_board(board_t* board, int mode);
 
-/*Add a specific character with colour i into position (pos_x,pos_y) of the creen
-Pre loaded colours:
-1- Yellow
-2- Red
-3- Blue
-4- White
-5- Green
-6- Magenta
-7- Cyan
-*/
 void draw(char c, int colour_i, int pos_x, int pos_y);
 
 /*Call ncurses refresh() to update the screen*/

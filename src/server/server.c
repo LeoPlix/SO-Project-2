@@ -13,11 +13,9 @@
 #include <pthread.h>
 #include <signal.h>
 
-// =============================================================================
+// ===================
 // 1. GLOBAIS E ESTADO
-// =============================================================================
 
-// Global
 session_t *sessions = NULL; // Active sessions
 int max_games = 0;
 connection_buffer_t conn_buffer; // Para gerir pedidos de comunicação
@@ -35,7 +33,6 @@ void* update_sender(void* arg);
 // ===============================================
 // 2. GESTÃO DE BUFFER DE CONEXÃO (Infraestrutura)
 
-// Gestão de buffer de conexão
 void init_connection_buffer(connection_buffer_t *buffer) {
     buffer->in = 0; buffer->out = 0; buffer->active = 1;
     
@@ -67,7 +64,7 @@ void cleanup_connection_resources(connection_buffer_t *buffer) {
 }
 
 void buffer_insert(connection_buffer_t *buffer, connection_request_t *request) {
-    // Otimização: verificação rápida antes de esperar pelo semáforo
+    // Verificação rápida antes de esperar pelo semáforo
     pthread_mutex_lock(&buffer->mutex);
     if (!buffer->active) { pthread_mutex_unlock(&buffer->mutex); return; }
     pthread_mutex_unlock(&buffer->mutex);
@@ -87,9 +84,7 @@ void buffer_insert(connection_buffer_t *buffer, connection_request_t *request) {
 
 // Garante que só se consome pedidos quando o buffer está ativo e há pedidos disponíveis
 int buffer_remove(connection_buffer_t *buffer, connection_request_t *request) {
-    // Otimização: Substituído o loop de sleep/trywait por espera bloqueante (sem_wait)
     // Se destroy_connection_buffer for chamado, ele faz post no semáforo, acordando esta thread
-    
     if (sem_wait(buffer->full) != 0) return -1; // Espera por item disponível
 
     pthread_mutex_lock(&buffer->mutex);
@@ -635,10 +630,11 @@ int main(int argc, char** argv) {
 
     destroy_connection_buffer(&conn_buffer);
     
+    // Desbloquear a host_thread que pode estar bloqueada num read()
     int dummy = open(registry_pipe, O_WRONLY | O_NONBLOCK);
     if(dummy != -1) close(dummy);
 
-    pthread_join(host_tid, NULL);
+    pthread_join(host_tid, NULL); // Espera que a host_thread termine
     for(int i=0; i<max_games; i++) pthread_join(mgr_tids[i], NULL);
     free(mgr_tids);
 
