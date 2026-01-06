@@ -105,6 +105,16 @@ int move_pacman(board_t* board, int pacman_index, command_t* command) {
     if (board->board[new_index].has_portal) {
         board->board[old_index].content = ' ';
         board->board[new_index].content = 'P';
+        
+        // Unlock antes de retornar
+        if (old_index < new_index) {
+            pthread_mutex_unlock(&board->board[old_index].lock);
+            pthread_mutex_unlock(&board->board[new_index].lock);
+        }
+        else {
+            pthread_mutex_unlock(&board->board[new_index].lock);
+            pthread_mutex_unlock(&board->board[old_index].lock);
+        }
         return REACHED_PORTAL;
     }
 

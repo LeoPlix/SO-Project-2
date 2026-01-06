@@ -13,6 +13,7 @@
 #include <errno.h>
 #include <pthread.h>
 #include <signal.h>
+#include <stdatomic.h>
 
 // ===================
 // 1. GLOBAIS E ESTADO
@@ -20,8 +21,8 @@
 session_t *sessions = NULL; // Active sessions
 int max_games = 0;
 connection_buffer_t conn_buffer; // Para gerir pedidos de comunicação
-volatile sig_atomic_t server_running = 1;
-volatile sig_atomic_t sigusr1_received = 0;
+_Atomic int server_running = 1;
+_Atomic int sigusr1_received = 0;
 char registry_pipe[MAX_PIPE_PATH_LENGTH];
 char levels_dir[256];
 int shutdown_pipe[2]; 
@@ -212,6 +213,7 @@ void generate_top5_file() {
 // LÓGICA DO JOGO E PROTOCOLO
 
 void send_board_update(session_t *sess) {
+    // NOTA: Esta função deve ser chamada com sess->session_lock já travado
     if (!sess->board || sess->notif_fd == -1) return;
     board_t *b = sess->board;
     
@@ -264,15 +266,14 @@ int handle_move_result(session_t *sess, int result) {
         if (load_next_level(sess) != 0) {
             sess->victory = 1;
             sess->game_active = 0;
-            pthread_mutex_unlock(&sess->session_lock);
             send_board_update(sess);
+            pthread_mutex_unlock(&sess->session_lock);
             return 0; 
         }
         
         sess->game_active = 1;  // Reativa o jogo
-        pthread_mutex_unlock(&sess->session_lock);
-        
         send_board_update(sess);
+        pthread_mutex_unlock(&sess->session_lock);
         
         // Restart update_sender thread
         if (pthread_create(&sess->update_thread, NULL, update_sender, sess) != 0) {
@@ -288,9 +289,9 @@ int handle_move_result(session_t *sess, int result) {
     
     if (result == DEAD_PACMAN) {
         debug("Session %d: Pacman died!\n", sess->session_id);
-        send_board_update(sess); 
         pthread_mutex_lock(&sess->session_lock);
         sess->game_active = 0;
+        send_board_update(sess);
         pthread_mutex_unlock(&sess->session_lock);
         return 0;
     }
@@ -303,8 +304,10 @@ int handle_move_result(session_t *sess, int result) {
 
 void* update_sender(void* arg) {
     session_t *sess = (session_t*)arg;
-    while (sess->game_active) {
+    int keep_running = 1;
+    while (keep_running) {
         pthread_mutex_lock(&sess->session_lock);
+        keep_running = sess->game_active;
         if (!sess->game_active || !sess->board) { pthread_mutex_unlock(&sess->session_lock); break; }
         int tempo = sess->board->tempo;
         pthread_mutex_unlock(&sess->session_lock);
@@ -339,7 +342,9 @@ void* session_handler(void* arg) {
     // Os pipes já foram abertos pelo session_manager, apenas verificar
     if (sess->req_fd == -1 || sess->notif_fd == -1) {
         debug("Session %d: Pipes not properly opened\n", sess->session_id);
-        sess->active = 0; 
+        pthread_mutex_lock(&sess->session_lock);
+        sess->active = 0;
+        pthread_mutex_unlock(&sess->session_lock);
         return NULL;
     }
 
@@ -357,7 +362,15 @@ void* session_handler(void* arg) {
     }
 
     char buf[256];
-    while (sess->game_active) {
+    int keep_running = 1;
+    int update_thread_joined = 0;
+    while (keep_running) {
+        pthread_mutex_lock(&sess->session_lock);
+        keep_running = sess->game_active;
+        pthread_mutex_unlock(&sess->session_lock);
+        
+        if (!keep_running) break;
+        
         if (read(sess->req_fd, buf, sizeof(buf)) <= 0) {
             debug("Client disconnected or error\n");
             break; 
@@ -373,12 +386,12 @@ void* session_handler(void* arg) {
         } else if (buf[0] == OP_CODE_PLAY && sess->board && sess->board->n_pacmans > 0) {
             command_t cmd = { .command = buf[1], .turns = 1, .turns_left = 1 };
             board_t *current_board = sess->board;
+            pthread_mutex_unlock(&sess->session_lock);
             
+            // Usar rwlock em vez de tentar controlar mutex interno do board
             pthread_rwlock_wrlock(&current_board->state_lock);
             int res = move_pacman(current_board, 0, &cmd);
             pthread_rwlock_unlock(&current_board->state_lock);
-
-            pthread_mutex_unlock(&sess->session_lock);
             
             if (res == REACHED_PORTAL) {
                 pthread_mutex_lock(&sess->session_lock);
@@ -386,9 +399,16 @@ void* session_handler(void* arg) {
                 pthread_mutex_unlock(&sess->session_lock);
                 
                 pthread_join(sess->update_thread, NULL);
+                update_thread_joined = 1;
                 
                 int move_result = handle_move_result(sess, res);
-                if (move_result == 2) { } // Nível processado
+                if (move_result == 2) {
+                    // Nova thread criada, resetar flag
+                    update_thread_joined = 0;
+                } else if (move_result == 0) {
+                    // Jogo acabou (vitória ou sem mais níveis), sair
+                    break;
+                }
                 continue;
             }
             
@@ -397,6 +417,9 @@ void* session_handler(void* arg) {
                 pthread_mutex_lock(&sess->session_lock);
                 send_board_update(sess);
                 pthread_mutex_unlock(&sess->session_lock);
+            } else if (move_result == 0) {
+                // Pacman morreu, sair
+                break;
             }
             continue;
         } else {
@@ -409,7 +432,10 @@ void* session_handler(void* arg) {
     sess->game_active = 0;
     pthread_mutex_unlock(&sess->session_lock);
     
-    pthread_join(sess->update_thread, NULL);
+    // Só fazer join se ainda não foi feito
+    if (!update_thread_joined) {
+        pthread_join(sess->update_thread, NULL);
+    }
     free_session_resources(sess);
     
     pthread_mutex_lock(&sess->session_lock);
@@ -503,7 +529,11 @@ void* manager_thread(void* arg) {
         
         sess->board = NULL;
         
-        if (load_next_level(sess) != 0) {
+        pthread_mutex_lock(&sess->session_lock);
+        int level_loaded = (load_next_level(sess) == 0);
+        pthread_mutex_unlock(&sess->session_lock);
+        
+        if (!level_loaded) {
             close(sess->req_fd);
             close(sess->notif_fd);
             pthread_mutex_lock(&sess->session_lock); 

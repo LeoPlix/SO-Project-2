@@ -43,8 +43,8 @@ typedef struct {
 } connection_buffer_t;
 
 // Variáveis Globais (extern)
-extern volatile sig_atomic_t server_running;
-extern volatile sig_atomic_t sigusr1_received; // Adicionado pois é usada no server.c
+extern _Atomic int server_running;
+extern _Atomic int sigusr1_received;
 extern char registry_pipe[MAX_PIPE_PATH_LENGTH];
 extern session_t *sessions;
 extern int max_games;
