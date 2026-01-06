@@ -263,11 +263,9 @@ int handle_move_result(session_t *sess, int result) {
         
         if (load_next_level(sess) != 0) {
             sess->victory = 1;
-            pthread_mutex_unlock(&sess->session_lock);
-            send_board_update(sess);
-            pthread_mutex_lock(&sess->session_lock);
             sess->game_active = 0;
             pthread_mutex_unlock(&sess->session_lock);
+            send_board_update(sess);
             return 0; 
         }
         

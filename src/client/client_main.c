@@ -28,6 +28,10 @@ static void *receiver_thread(void *arg) {
             pthread_mutex_lock(&mutex);
             stop_execution = true;
             pthread_mutex_unlock(&mutex);
+
+            clear();
+            refresh();
+
             break;
         }
 
