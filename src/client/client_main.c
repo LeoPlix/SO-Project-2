@@ -12,9 +12,9 @@
 #include <unistd.h>
 #include <pthread.h>
 
-Board board;
+Board board = {0};
 bool stop_execution = false;
-int tempo;
+int tempo = 0;
 pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 
 static void *receiver_thread(void *arg) {
@@ -22,11 +22,17 @@ static void *receiver_thread(void *arg) {
 
     while (true) {
         
-        Board board = receive_board_update();
+        Board new_board = receive_board_update();
 
-        if (!board.data || board.game_over == 1){
+        if (!new_board.data || new_board.game_over == 1){
             pthread_mutex_lock(&mutex);
             stop_execution = true;
+            
+            // Update the global board one last time
+            if (board.data) {
+                free(board.data);
+            }
+            board = new_board;
             pthread_mutex_unlock(&mutex);
 
             clear();
@@ -36,11 +42,32 @@ static void *receiver_thread(void *arg) {
         }
 
         pthread_mutex_lock(&mutex);
-        tempo = board.tempo;
+        tempo = new_board.tempo;
+        
+        // Free old board data and update global board
+        if (board.data) {
+            free(board.data);
+        }
+        board = new_board;
+        
+        // Make a copy for drawing (we'll draw outside the lock)
+        Board board_copy = board;
+        board_copy.data = NULL; // Will allocate separately
+        if (board.data) {
+            size_t data_size = board.width * board.height;
+            board_copy.data = malloc(data_size + 1);
+            if (board_copy.data) {
+                memcpy(board_copy.data, board.data, data_size + 1);
+            }
+        }
         pthread_mutex_unlock(&mutex);
 
-        draw_board_client(board);
-        refresh_screen();
+        // Draw outside the lock to avoid holding it too long
+        if (board_copy.data) {
+            draw_board_client(board_copy);
+            refresh_screen();
+            free(board_copy.data);
+        }
     }
 
     debug("Returning receiver thread...\n");
@@ -89,7 +116,12 @@ int main(int argc, char *argv[]) {
 
     terminal_init();
     set_timeout(500);
-    draw_board_client(board);
+    
+    pthread_mutex_lock(&mutex);
+    Board board_copy = board;
+    pthread_mutex_unlock(&mutex);
+    
+    draw_board_client(board_copy);
     refresh_screen();
 
     char command;
@@ -155,6 +187,14 @@ int main(int argc, char *argv[]) {
     if (cmd_fp)
         fclose(cmd_fp);
 
+    // Clean up board data
+    pthread_mutex_lock(&mutex);
+    if (board.data) {
+        free(board.data);
+        board.data = NULL;
+    }
+    pthread_mutex_unlock(&mutex);
+    
     pthread_mutex_destroy(&mutex);
 
     terminal_cleanup();
