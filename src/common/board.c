@@ -1,7 +1,7 @@
 #include "board.h"
 #include "parser.h"
 #include <stdlib.h>
-#include <stdio.h> //snprintf
+#include <stdio.h> 
 #include <fcntl.h>
 #include <time.h>
 #include <unistd.h>

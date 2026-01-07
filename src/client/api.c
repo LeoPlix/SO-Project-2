@@ -25,7 +25,7 @@ int pacman_connect(char const *req_pipe_path, char const *notif_pipe_path, char 
   strncpy(session.req_pipe_path, req_pipe_path, MAX_PIPE_PATH_LENGTH);
   strncpy(session.notif_pipe_path, notif_pipe_path, MAX_PIPE_PATH_LENGTH);
   
-  // Criar FIFOs do cliente
+  // Retirar pipes que podiam existir de outras sessões
   unlink(req_pipe_path);
   unlink(notif_pipe_path);
   

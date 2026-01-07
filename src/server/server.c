@@ -212,8 +212,8 @@ void generate_top5_file() {
 // ==========================
 // LÓGICA DO JOGO E PROTOCOLO
 
+// Envia update do board para o cliente
 void send_board_update(session_t *sess) {
-    // NOTA: Esta função deve ser chamada com sess->session_lock já travado
     if (!sess->board || sess->notif_fd == -1) return;
     board_t *b = sess->board;
     
@@ -259,7 +259,6 @@ int handle_move_result(session_t *sess, int result) {
     if (result == REACHED_PORTAL) {
         debug("Session %d: Pacman reached portal!\n", sess->session_id);
         
-        // update_sender JÁ foi parada pelo caller
         pthread_mutex_lock(&sess->session_lock);
         sess->current_level++;
         
@@ -388,7 +387,6 @@ void* session_handler(void* arg) {
             board_t *current_board = sess->board;
             pthread_mutex_unlock(&sess->session_lock);
             
-            // Usar rwlock em vez de tentar controlar mutex interno do board
             pthread_rwlock_wrlock(&current_board->state_lock);
             int res = move_pacman(current_board, 0, &cmd);
             pthread_rwlock_unlock(&current_board->state_lock);
@@ -454,9 +452,7 @@ void* manager_thread(void* arg) {
 
     while (server_running) {
         connection_request_t req;
-        // Otimização: O remove agora bloqueia até haver trabalho, sem busy-wait
         if (buffer_remove(&conn_buffer, &req) != 0) {
-            // Se retornou -1, o buffer foi desativado ou ocorreu erro, verifica se deve terminar
             if (!server_running) break;
             continue;
         }
