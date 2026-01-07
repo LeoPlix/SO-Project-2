@@ -1,0 +1,16 @@
+D
+D
+D
+S
+S
+A
+W
+D
+S
+S
+D
+D
+W
+W
+A
+A
