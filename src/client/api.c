@@ -53,7 +53,6 @@ int pacman_connect(char const *req_pipe_path, char const *notif_pipe_path, char 
   memcpy(msg + 1 + MAX_PIPE_PATH_LENGTH, notif_pipe_path, MAX_PIPE_PATH_LENGTH);
   memcpy(msg + 1 + MAX_PIPE_PATH_LENGTH * 2, server_pipe_path, MAX_PIPE_PATH_LENGTH);
   
-  // CORREÇÃO 1: Verificar retorno do write
   if (write(server_fd, msg, sizeof(msg)) == -1) {
       perror("Failed to write connect message to server");
       close(server_fd);
@@ -82,7 +81,7 @@ int pacman_connect(char const *req_pipe_path, char const *notif_pipe_path, char 
     return 1;
   }
   
-  // ESPERAR pela mensagem de confirmação do servidor
+  // Esperar pela mensagem de confirmação do servidor
   // O cliente fica bloqueado aqui até o servidor ter um slot disponível
   char confirmation[2];
   ssize_t bytes_read = read(session.notif_pipe, confirmation, 2);
@@ -106,11 +105,8 @@ void pacman_play(char command) {
   char msg[2];
   msg[0] = OP_CODE_PLAY;
   msg[1] = command;
-  
-  // CORREÇÃO 2: Verificar retorno do write
-  // Como a função é void, apenas registamos erro se falhar
+
   if (write(session.req_pipe, msg, 2) == -1) {
-      // Se a escrita falhar, provavelmente o pipe quebrou
       perror("Failed to send play command");
   }
 }
@@ -124,7 +120,6 @@ int pacman_disconnect() {
   char msg[1];
   msg[0] = OP_CODE_DISCONNECT;
   
-  // CORREÇÃO 3: Verificar retorno do write
   if (write(session.req_pipe, msg, 1) == -1) {
       perror("Failed to send disconnect");
       // Mesmo falhando o envio, tentamos limpar os recursos abaixo
@@ -133,7 +128,6 @@ int pacman_disconnect() {
   // Aguardar resposta
   char response[2] = {0}; // Inicializar a zero
   
-  // CORREÇÃO 4: Verificar retorno do read
   if (read(session.notif_pipe, response, 2) <= 0) {
       // Se falhar a leitura ou ler 0 bytes (EOF), assumimos erro
       // mas continuamos para limpar os pipes locais
@@ -193,7 +187,6 @@ Board receive_board_update(void) {
   // Alocar e ler dados do tabuleiro
   int board_size = board.width * board.height;
   
-  // Segurança básica: verificar se board_size é razoável antes de malloc
   if (board_size > 0 && board_size < 8000) { 
       board.data = malloc(board_size + 1);
       if (board.data) { // Verificar se malloc não falhou
