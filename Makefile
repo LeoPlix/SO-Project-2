@@ -19,7 +19,7 @@ CLIENT_TARGET := client
 SERVER_TARGET := PacmanIST
 
 # Fontes
-CLIENT_SRCS := $(CLIENT_DIR)/client_main.c $(CLIENT_DIR)/api.c $(CLIENT_DIR)/debug.c
+CLIENT_SRCS := $(CLIENT_DIR)/client_main.c $(CLIENT_DIR)/api.c $(CLIENT_DIR)/debug.c $(CLIENT_DIR)/display.c
 SERVER_SRCS := $(SERVER_DIR)/server.c $(CLIENT_DIR)/debug.c
 COMMON_SRCS := $(wildcard $(COMMON_DIR)/*.c)
 
