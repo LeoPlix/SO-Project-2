@@ -1,4 +1,3 @@
-
 #include "board.h"
 #include "display.h"
 #include "server.h"
