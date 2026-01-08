@@ -16,7 +16,7 @@ SERVER_TARGET := PacmanIST
 # Fontes
 CLIENT_SRCS := $(CLIENT_DIR)/client_main.c $(CLIENT_DIR)/api.c $(CLIENT_DIR)/debug.c $(CLIENT_DIR)/display.c
 SERVER_SRCS := $(SERVER_DIR)/server.c $(CLIENT_DIR)/debug.c
-COMMON_SRCS := $(wildcard $(COMMON_DIR)/*.c)
+COMMON_SRCS := $(filter-out $(COMMON_DIR)/display.c,$(wildcard $(COMMON_DIR)/*.c))
 
 # Objetos
 CLIENT_OBJS := $(patsubst $(CLIENT_DIR)/%.c,$(OBJ_DIR)/client_%.o,$(CLIENT_SRCS))
