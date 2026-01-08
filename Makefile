@@ -1,8 +1,3 @@
-pacmanist: $(BIN_DIR)/$(TARGET)
-pacmanist-server: $(BIN_DIR)/$(SERVER_TARGET)
-pacmanist: $(BIN_DIR)/$(TARGET)
-pacmanist-server: $(BIN_DIR)/$(SERVER_TARGET)
-
 # Pacmanist Makefile (estrutura src/client, src/server, src/common)
 
 # Diretórios
@@ -25,7 +20,8 @@ COMMON_SRCS := $(wildcard $(COMMON_DIR)/*.c)
 
 # Objetos
 CLIENT_OBJS := $(patsubst $(CLIENT_DIR)/%.c,$(OBJ_DIR)/client_%.o,$(CLIENT_SRCS))
-SERVER_OBJS := $(patsubst $(SERVER_DIR)/%.c,$(OBJ_DIR)/server_%.o,$(SERVER_SRCS))
+SERVER_OBJS := $(patsubst $(SERVER_DIR)/%.c,$(OBJ_DIR)/server_%.o,$(filter $(SERVER_DIR)/%,$(SERVER_SRCS))) \
+               $(patsubst $(CLIENT_DIR)/%.c,$(OBJ_DIR)/client_%.o,$(filter $(CLIENT_DIR)/%,$(SERVER_SRCS)))
 COMMON_OBJS := $(patsubst $(COMMON_DIR)/%.c,$(OBJ_DIR)/common_%.o,$(COMMON_SRCS))
 
 # Flags
@@ -33,8 +29,14 @@ CC := gcc
 CFLAGS := -g -Wall -Wextra -Werror -std=c17 -D_POSIX_C_SOURCE=200809L -I$(INCLUDE_DIR) -fsanitize=thread
 LDFLAGS := -lncurses -fsanitize=thread
 
+# Alvo padrão (executado com apenas 'make')
+.DEFAULT_GOAL := all
+
 # Alvos principais
 all: folders $(BIN_DIR)/$(CLIENT_TARGET) $(BIN_DIR)/$(SERVER_TARGET)
+
+# Rebuild: limpa e reconstrói tudo
+rebuild: clean all
 
 $(BIN_DIR)/$(CLIENT_TARGET): $(CLIENT_OBJS) $(COMMON_OBJS)
 	$(CC) $(CFLAGS) $^ -o $@ $(LDFLAGS)
@@ -61,4 +63,4 @@ folders:
 clean:
 	rm -rf $(OBJ_DIR)/* $(BIN_DIR)/$(CLIENT_TARGET) $(BIN_DIR)/$(SERVER_TARGET)
 
-.PHONY: all clean folders
+.PHONY: all clean folders rebuild
