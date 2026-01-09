@@ -8,6 +8,7 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/select.h>
 #include <dirent.h>
 #include <errno.h>
 #include <pthread.h>
@@ -22,6 +23,7 @@ int max_games = 0;
 connection_buffer_t conn_buffer; // Para gerir pedidos de comunicação
 _Atomic int server_running = 1;
 _Atomic int sigusr1_received = 0;
+pthread_mutex_t top5_mutex = PTHREAD_MUTEX_INITIALIZER; // Protege geração do top5
 char registry_pipe[MAX_PIPE_PATH_LENGTH];
 char levels_dir[256];
 int shutdown_pipe[2]; 
@@ -177,6 +179,12 @@ int compare_scores(const void *a, const void *b) {
 }
 
 void generate_top5_file() {
+    // Mutex para evitar múltiplas execuções simultâneas
+    if (pthread_mutex_trylock(&top5_mutex) != 0) {
+        debug("Top 5 generation already in progress, skipping...\n");
+        return; // Já está a gerar, ignora este pedido
+    }
+    
     debug("Generating top 5 clients file...\n");
     struct score_entry scores[max_games];
     int num = 0;
@@ -205,7 +213,11 @@ void generate_top5_file() {
         if (num == 0) fprintf(f, "Nenhum cliente ativo.\n");
         fclose(f);
         debug("Top 5 generated with %d clients\n", limit);
+    } else {
+        debug("Failed to open top5.txt for writing\n");
     }
+    
+    pthread_mutex_unlock(&top5_mutex);
 }
 
 // ==========================
@@ -578,22 +590,44 @@ void* host_thread(void* arg) {
     
     int reg_fd = open(registry_pipe, O_RDWR | O_NONBLOCK);
     if (reg_fd == -1) { debug("Failed to open registry\n"); return NULL; }
-    
-    fcntl(reg_fd, F_SETFL, fcntl(reg_fd, F_GETFL) & ~O_NONBLOCK);
 
     while (server_running) {
-        if (sigusr1_received) { sigusr1_received = 0; generate_top5_file(); }
+        // Verifica se recebeu SIGUSR1
+        if (sigusr1_received) { 
+            sigusr1_received = 0; 
+            generate_top5_file(); 
+        }
         
+        // Usa select com timeout para não bloquear indefinidamente
+        fd_set readfds;
+        FD_ZERO(&readfds);
+        FD_SET(reg_fd, &readfds);
+        
+        struct timeval timeout;
+        timeout.tv_sec = 0;
+        timeout.tv_usec = 500000; // 500ms timeout
+        
+        int ready = select(reg_fd + 1, &readfds, NULL, NULL, &timeout);
+        
+        if (!server_running) break;
+        
+        if (ready < 0) {
+            if (errno == EINTR) continue; // Sinal recebido, volta ao loop
+            sleep_ms(100);
+            continue;
+        }
+        
+        if (ready == 0) continue; // Timeout, volta ao loop para verificar sigusr1_received
+        
+        // Há dados para ler
         char buf[1 + MAX_PIPE_PATH_LENGTH * 3];
         ssize_t n = read(reg_fd, buf, sizeof(buf));
-        if (!server_running) break;
-
+        
         if (n <= 0) {
             if (n == 0) { // EOF - reabrir
                 close(reg_fd);
                 reg_fd = open(registry_pipe, O_RDWR | O_NONBLOCK);
-                if (reg_fd != -1) fcntl(reg_fd, F_SETFL, fcntl(reg_fd, F_GETFL) & ~O_NONBLOCK);
-                else sleep_ms(100);
+                if (reg_fd == -1) sleep_ms(100);
             } else if (errno != EINTR) {
                 sleep_ms(100);
             }
@@ -655,8 +689,21 @@ int main(int argc, char** argv) {
     unlink(registry_pipe); 
     if (mkfifo(registry_pipe, 0666) == -1) { perror("mkfifo"); return 1; }
 
-    signal(SIGINT, signal_handler); 
-    signal(SIGUSR1, signal_handler); 
+    // Configurar signal handlers com sigaction (mais robusto que signal)
+    struct sigaction sa_int, sa_usr1;
+    
+    // SIGINT: sem SA_RESTART para permitir interrupção imediata
+    sa_int.sa_handler = signal_handler;
+    sigemptyset(&sa_int.sa_mask);
+    sa_int.sa_flags = 0; // Sem restart, para permitir interromper o servidor
+    sigaction(SIGINT, &sa_int, NULL);
+    
+    // SIGUSR1: com SA_RESTART para não interromper operações normais
+    sa_usr1.sa_handler = signal_handler;
+    sigemptyset(&sa_usr1.sa_mask);
+    sa_usr1.sa_flags = SA_RESTART;
+    sigaction(SIGUSR1, &sa_usr1, NULL);
+    
     signal(SIGPIPE, SIG_IGN); 
 
     pthread_t host_tid, *mgr_tids = malloc(max_games * sizeof(pthread_t));
@@ -699,6 +746,7 @@ int main(int argc, char** argv) {
         pthread_mutex_destroy(&sessions[i].session_lock);
     }
     
+    pthread_mutex_destroy(&top5_mutex);
     free(sessions);
     close(shutdown_pipe[0]); close(shutdown_pipe[1]); 
     unlink(registry_pipe);
