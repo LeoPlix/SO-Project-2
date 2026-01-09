@@ -345,12 +345,10 @@ void* update_sender(void* arg) {
 }
 
 // Gere toda a vida de uma sessão de jogo
-// Gere toda a vida de uma sessão de jogo
 void* session_handler(void* arg) {
     session_t *sess = (session_t*)arg;
     debug("Session %d handler started\n", sess->session_id);
     
-    // Os pipes já foram abertos pelo session_manager, apenas verificar
     if (sess->req_fd == -1 || sess->notif_fd == -1) {
         debug("Session %d: Pipes not properly opened\n", sess->session_id);
         pthread_mutex_lock(&sess->session_lock);
@@ -375,17 +373,41 @@ void* session_handler(void* arg) {
     char buf[256];
     int keep_running = 1;
     int update_thread_joined = 0;
-    while (keep_running) {
+
+    while (keep_running && server_running) { // Verificar server_running
         pthread_mutex_lock(&sess->session_lock);
         keep_running = sess->game_active;
         pthread_mutex_unlock(&sess->session_lock);
         
         if (!keep_running) break;
         
+        // --- ALTERAÇÃO: Usar select com timeout em vez de read bloqueante ---
+        fd_set read_fds;
+        FD_ZERO(&read_fds);
+        FD_SET(sess->req_fd, &read_fds);
+
+        struct timeval tv;
+        tv.tv_sec = 0;
+        tv.tv_usec = 100000; // 100ms timeout
+
+        int retval = select(sess->req_fd + 1, &read_fds, NULL, NULL, &tv);
+
+        if (!server_running) break; // Verificar shutdown após o select
+
+        if (retval == -1) {
+            if (errno == EINTR) continue; // Sinal recebido, tentar de novo
+            debug("Session %d: Select error\n", sess->session_id);
+            break;
+        } else if (retval == 0) {
+            continue; // Timeout, volta ao início do loop para verificar flags
+        }
+
+        // Se chegámos aqui, há dados para ler
         if (read(sess->req_fd, buf, sizeof(buf)) <= 0) {
             debug("Client disconnected or error\n");
             break; 
         }
+        // -------------------------------------------------------------------
 
         pthread_mutex_lock(&sess->session_lock);
         if (buf[0] == OP_CODE_DISCONNECT) {
@@ -413,10 +435,8 @@ void* session_handler(void* arg) {
                 
                 int move_result = handle_move_result(sess, res);
                 if (move_result == 2) {
-                    // Nova thread criada, resetar flag
                     update_thread_joined = 0;
                 } else if (move_result == 0) {
-                    // Jogo acabou (vitória ou sem mais níveis), sair
                     break;
                 }
                 continue;
@@ -428,7 +448,6 @@ void* session_handler(void* arg) {
                 send_board_update(sess);
                 pthread_mutex_unlock(&sess->session_lock);
             } else if (move_result == 0) {
-                // Pacman morreu, sair
                 break;
             }
             continue;
@@ -442,20 +461,17 @@ void* session_handler(void* arg) {
     sess->game_active = 0;
     pthread_mutex_unlock(&sess->session_lock);
     
-    // Só fazer join se ainda não foi feito
     if (!update_thread_joined) {
         pthread_join(sess->update_thread, NULL);
     }
     free_session_resources(sess);
 
-    // Guardamos o ID localmente antes de libertar o slot
     int local_id = sess->session_id;
 
     pthread_mutex_lock(&sess->session_lock);
-    sess->active = 0; // Libertamos o slot
+    sess->active = 0; 
     pthread_mutex_unlock(&sess->session_lock);
     
-    // Usamos a variável local para o debug
     debug("Session %d ended (Slot freed)\n", local_id);
     
     return NULL;
@@ -689,16 +705,13 @@ int main(int argc, char** argv) {
     unlink(registry_pipe); 
     if (mkfifo(registry_pipe, 0666) == -1) { perror("mkfifo"); return 1; }
 
-    // Configurar signal handlers com sigaction (mais robusto que signal)
     struct sigaction sa_int, sa_usr1;
     
-    // SIGINT: sem SA_RESTART para permitir interrupção imediata
     sa_int.sa_handler = signal_handler;
     sigemptyset(&sa_int.sa_mask);
-    sa_int.sa_flags = 0; // Sem restart, para permitir interromper o servidor
+    sa_int.sa_flags = 0; 
     sigaction(SIGINT, &sa_int, NULL);
     
-    // SIGUSR1: com SA_RESTART para não interromper operações normais
     sa_usr1.sa_handler = signal_handler;
     sigemptyset(&sa_usr1.sa_mask);
     sa_usr1.sa_flags = SA_RESTART;
@@ -723,24 +736,31 @@ int main(int argc, char** argv) {
 
     debug("Server running...\n");
     
-    while(server_running) sleep(1); // Main thread waits for signal
+    while(server_running) sleep(1); 
 
     debug("Shutdown signal received.\n");
 
+    // 1. Acordar manager_threads (estão no sem_wait)
     destroy_connection_buffer(&conn_buffer);
     
-    // Desbloquear a host_thread que pode estar bloqueada num read()
+    // 2. Acordar host_thread (está no select ou read do registry)
     int dummy = open(registry_pipe, O_WRONLY | O_NONBLOCK);
     if(dummy != -1) close(dummy);
 
-    pthread_join(host_tid, NULL); // Espera que a host_thread termine
+    // 3. (CORREÇÃO) Remover o loop que fechava FDs aqui. 
+    // As session_handlers vão acordar pelo timeout do select(), 
+    // ver que server_running é 0 e sair sozinhas.
+
+    pthread_join(host_tid, NULL); 
     for(int i=0; i<max_games; i++) pthread_join(mgr_tids[i], NULL);
     free(mgr_tids);
 
     cleanup_connection_resources(&conn_buffer);
 
+    // Limpeza final de memória
     for(int i=0; i<max_games; i++) {
         pthread_mutex_lock(&sessions[i].session_lock);
+        // Garante que libertamos recursos se alguma sessão ficou a meio
         if(sessions[i].active) free_session_resources(&sessions[i]);
         pthread_mutex_unlock(&sessions[i].session_lock);
         pthread_mutex_destroy(&sessions[i].session_lock);
