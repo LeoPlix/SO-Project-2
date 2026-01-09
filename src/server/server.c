@@ -217,7 +217,7 @@ void send_board_update(session_t *sess) {
     board_t *b = sess->board;
     
     // Otimização: Buffer maior para evitar overflow em mapas grandes (ex: 100x100)
-    static char msg[16384]; 
+    char msg[16384]; 
     int off = 0;
 
     msg[off++] = OP_CODE_BOARD;
@@ -333,6 +333,7 @@ void* update_sender(void* arg) {
 }
 
 // Gere toda a vida de uma sessão de jogo
+// Gere toda a vida de uma sessão de jogo
 void* session_handler(void* arg) {
     session_t *sess = (session_t*)arg;
     debug("Session %d handler started\n", sess->session_id);
@@ -434,12 +435,17 @@ void* session_handler(void* arg) {
         pthread_join(sess->update_thread, NULL);
     }
     free_session_resources(sess);
-    
+
+    // Guardamos o ID localmente antes de libertar o slot
+    int local_id = sess->session_id;
+
     pthread_mutex_lock(&sess->session_lock);
-    sess->active = 0;
+    sess->active = 0; // Libertamos o slot
     pthread_mutex_unlock(&sess->session_lock);
     
-    debug("Session %d ended (Slot freed)\n", sess->session_id);
+    // Usamos a variável local para o debug
+    debug("Session %d ended (Slot freed)\n", local_id);
+    
     return NULL;
 }
 
@@ -456,6 +462,29 @@ void* manager_thread(void* arg) {
             continue;
         }
 
+        // Extrair o ID do cliente ANTES de procurar slot
+        char *filename = strrchr(req.req_pipe_path, '/');
+        if (filename) filename++; else filename = req.req_pipe_path;
+        int requested_id = atoi(filename);
+
+        // Percorre todas as sessões para ver se este ID já está ativo
+        int is_duplicate = 0;
+        for (int i = 0; i < max_games; i++) {
+            pthread_mutex_lock(&sessions[i].session_lock);
+            if (sessions[i].active && sessions[i].session_id == requested_id) {
+                is_duplicate = 1;
+            }
+            pthread_mutex_unlock(&sessions[i].session_lock);
+            
+            if (is_duplicate) break; 
+        }
+
+        if (is_duplicate) {
+            debug("Manager %d: Client ID %d already active. Ignoring request.\n", id, requested_id);
+            // Ignora o pedido e volta ao início do loop
+            continue;
+        }
+
         int sess_id = -1;
         // Procura slot livre
         for (int i = 0; i < max_games; i++) {
@@ -464,10 +493,9 @@ void* manager_thread(void* arg) {
                 sess_id = i; 
                 sessions[i].active = 1; 
                 
-                char *filename = strrchr(req.req_pipe_path, '/');
-                if (filename) filename++; else filename = req.req_pipe_path;
+                // Atribuição do ID (que já extraímos em cima)
+                sessions[i].session_id = requested_id;
                 
-                sessions[i].session_id = atoi(filename);
                 sessions[i].game_active = 1; 
                 sessions[i].victory = 0; 
                 sessions[i].current_level = 0;
