@@ -10,37 +10,38 @@
 #include <stdlib.h>
 #include <pthread.h>
 
-
 struct Session {
   int id;
-  int req_pipe;
-  int notif_pipe;
+  int req_pipe;   // File descriptor for writing requests
+  int notif_pipe; // File descriptor for reading notifications
   char req_pipe_path[MAX_PIPE_PATH_LENGTH + 1];
   char notif_pipe_path[MAX_PIPE_PATH_LENGTH + 1];
 };
 
+// Session structure protected by a mutex
 static struct Session session = {.id = -1};
 static pthread_mutex_t session_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 int pacman_connect(char const *req_pipe_path, char const *notif_pipe_path, char const *server_pipe_path) {
-  // Guardar caminhos dos pipes
   strncpy(session.req_pipe_path, req_pipe_path, MAX_PIPE_PATH_LENGTH);
   strncpy(session.notif_pipe_path, notif_pipe_path, MAX_PIPE_PATH_LENGTH);
   
-  // Retirar pipes que podiam existir de outras sessões
+  // Remove pipes that might exist from previous crashed sessions
   unlink(req_pipe_path);
   unlink(notif_pipe_path);
   
+  // Create FIFO for client -> server requests
   if (mkfifo(req_pipe_path, 0666) == -1) {
     return 1;
   }
   
+  // Create FIFO for server -> client notifications
   if (mkfifo(notif_pipe_path, 0666) == -1) {
     unlink(req_pipe_path);
     return 1;
   }
   
-  // Enviar pedido de conexão ao servidor
+  // Send connection request to the server's public FIFO
   int server_fd = open(server_pipe_path, O_WRONLY);
   if (server_fd == -1) {
     unlink(req_pipe_path);
@@ -48,7 +49,7 @@ int pacman_connect(char const *req_pipe_path, char const *notif_pipe_path, char 
     return 1;
   }
   
-  // Mensagem: OP_CODE_CONNECT | req_pipe_path | notif_pipe_path | server_pipe_path
+  // OP_CODE_CONNECT | req_pipe_path | notif_pipe_path | server_pipe_path
   char msg[MAX_PIPE_PATH_LENGTH * 3 + 1];
   msg[0] = OP_CODE_CONNECT;
   memcpy(msg + 1, req_pipe_path, MAX_PIPE_PATH_LENGTH);
@@ -65,8 +66,7 @@ int pacman_connect(char const *req_pipe_path, char const *notif_pipe_path, char 
 
   close(server_fd);
   
-  // Abrir FIFOs para comunicação
-  // Primeiro abrir req_pipe para escrita
+  // Open FIFOs for communication
   session.req_pipe = open(req_pipe_path, O_WRONLY);
   if (session.req_pipe == -1) {
     unlink(req_pipe_path);
@@ -74,7 +74,7 @@ int pacman_connect(char const *req_pipe_path, char const *notif_pipe_path, char 
     return 1;
   }
   
-  // Depois abrir notif_pipe para leitura
+  // Open notification pipe for reading
   session.notif_pipe = open(notif_pipe_path, O_RDONLY);
   if (session.notif_pipe == -1) {
     close(session.req_pipe);
@@ -83,8 +83,8 @@ int pacman_connect(char const *req_pipe_path, char const *notif_pipe_path, char 
     return 1;
   }
   
-  // Esperar pela mensagem de confirmação do servidor
-  // O cliente fica bloqueado aqui até o servidor ter um slot disponível
+  // Wait for confirmation message from the server
+  // The client remains blocked here until the server assigns a slot
   char confirmation[2];
   ssize_t bytes_read = read(session.notif_pipe, confirmation, 2);
   if (bytes_read != 2 || confirmation[0] != OP_CODE_CONNECT) {
@@ -107,7 +107,7 @@ void pacman_play(char command) {
     return;
   }
   
-  // Enviar comando: OP_CODE_PLAY | command
+  // OP_CODE_PLAY | command_char
   char msg[2];
   msg[0] = OP_CODE_PLAY;
   msg[1] = command;
@@ -123,6 +123,8 @@ int pacman_disconnect() {
   int notif_pipe = session.notif_pipe;
   char req_path[MAX_PIPE_PATH_LENGTH + 1];
   char notif_path[MAX_PIPE_PATH_LENGTH + 1];
+  
+  // Copy paths to local stack to safely use them after unlocking
   strncpy(req_path, session.req_pipe_path, MAX_PIPE_PATH_LENGTH + 1);
   strncpy(notif_path, session.notif_pipe_path, MAX_PIPE_PATH_LENGTH + 1);
   
@@ -132,7 +134,7 @@ int pacman_disconnect() {
   }
   pthread_mutex_unlock(&session_mutex);
   
-  // Enviar pedido de desconexão
+  // Send disconnect request
   char msg[1];
   msg[0] = OP_CODE_DISCONNECT;
   
@@ -140,19 +142,19 @@ int pacman_disconnect() {
       perror("Failed to send disconnect");
   }
   
-  // Aguardar resposta
+  // Wait for server acknowledgement
   char response[2] = {0};
   
   if (read(notif_pipe, response, 2) <= 0) {
-      // Continuar para limpar recursos
+      // If read fails, continue anyway to clean up local resources
   }
   
   pthread_mutex_lock(&session_mutex);
-  // Fechar pipes
+  // Close file descriptors
   close(session.req_pipe);
   close(session.notif_pipe);
   
-  // Remover FIFOs
+  // Remove FIFO files from filesystem
   unlink(req_path);
   unlink(notif_path);
   
@@ -174,7 +176,7 @@ Board receive_board_update(void) {
     return board;
   }
   
-  // Ler mensagem: OP_CODE | width | height | tempo | victory | game_over | accumulated_points | board_data
+  // OP_CODE | width | height | time | victory | game_over | accumulated_points | board_data
   char buffer[8192];
   ssize_t bytes_read = read(notif_pipe, buffer, sizeof(buffer));
   
@@ -184,13 +186,13 @@ Board receive_board_update(void) {
   
   int offset = 0;
   
-  // OP_CODE
+  // Validate OpCode
   char op_code = buffer[offset++];
   if (op_code != OP_CODE_BOARD) {
     return board;
   }
   
-  // Ler dimensões e estado
+  // Deserialize dimensions and game state
   memcpy(&board.width, buffer + offset, sizeof(int));
   offset += sizeof(int);
   memcpy(&board.height, buffer + offset, sizeof(int));
@@ -204,14 +206,13 @@ Board receive_board_update(void) {
   memcpy(&board.accumulated_points, buffer + offset, sizeof(int));
   offset += sizeof(int);
   
-  // Alocar e ler dados do tabuleiro
   int board_size = board.width * board.height;
   
   if (board_size > 0 && board_size < 8000) { 
       board.data = malloc(board_size + 1);
-      if (board.data) { // Verificar se malloc não falhou
+      if (board.data) { // Ensure malloc succeeded
         memcpy(board.data, buffer + offset, board_size);
-        board.data[board_size] = '\0';
+        board.data[board_size] = '\0'; // Null-terminate for string safety
       }
   }
   
