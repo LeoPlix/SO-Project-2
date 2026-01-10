@@ -1,6 +1,6 @@
 # Monstro 3 - Movimento aleatorio
 PASSO 1
-POS 7 15
+POS 1 7
 R
 R
 R
