@@ -65,8 +65,8 @@ int pacman_connect(char const *req_pipe_path, char const *notif_pipe_path, char 
 
   close(server_fd);
   
-  // Abrir FIFOs para comunicação (ordem correta para evitar deadlock)
-  // Primeiro abrir req_pipe para escrita (servidor está à espera para ler)
+  // Abrir FIFOs para comunicação
+  // Primeiro abrir req_pipe para escrita
   session.req_pipe = open(req_pipe_path, O_WRONLY);
   if (session.req_pipe == -1) {
     unlink(req_pipe_path);

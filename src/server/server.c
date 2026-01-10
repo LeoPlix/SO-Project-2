@@ -507,6 +507,7 @@ void* manager_thread(void* arg) {
 
         if (sess_id == -1) { 
             debug("Manager %d: No slots available, putting request back\n", id);
+            // Passa a ser gerido pelos semáforos
             buffer_insert(&conn_buffer, &req);
             sleep(1); 
             continue;
@@ -547,7 +548,6 @@ void* manager_thread(void* arg) {
         sess->board = NULL;
         
         pthread_mutex_lock(&sess->session_lock);
-        // Usa a nova função com cache
         int level_loaded = (load_next_level(sess) == 0);
         pthread_mutex_unlock(&sess->session_lock);
         
@@ -579,7 +579,6 @@ void* host_thread(void* arg) {
             generate_top5_file(); 
         }
         
-        // Tentar ler sem bloquear (reg_fd já está em O_NONBLOCK)
         char buf[1 + MAX_PIPE_PATH_LENGTH * 3];
         ssize_t n = read(reg_fd, buf, sizeof(buf));
         
@@ -590,9 +589,7 @@ void* host_thread(void* arg) {
                 reg_fd = open(registry_pipe, O_RDWR | O_NONBLOCK);
                 if (reg_fd == -1) sleep_ms(100);
             } else if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                // Sem dados - esperar um pouco
-                struct timespec ts = {0, 100000000}; // 100ms
-                nanosleep(&ts, NULL);
+                sleep_ms(100);
             } else if (errno != EINTR) {
                 sleep_ms(100);
             }
@@ -636,7 +633,7 @@ int main(int argc, char** argv) {
     strncpy(levels_dir, argv[1], 255); 
     strncpy(registry_pipe, argv[3], MAX_PIPE_PATH_LENGTH-1);
     
-    // Inicialização da cache de níveis no arranque (I/O intensivo feito apenas uma vez)
+    // Inicialização da cache de níveis
     init_level_cache(levels_dir);
 
     if (pipe(shutdown_pipe) == -1) return 1;
@@ -647,6 +644,7 @@ int main(int argc, char** argv) {
     sessions = calloc(max_games, sizeof(session_t));
     if (!sessions) { fprintf(stderr, "Failed to allocate sessions\n"); return 1; }
 
+    // Colocar um mutex em cada sessão
     for(int i=0; i<max_games; i++) { 
         sessions[i].req_fd = sessions[i].notif_fd = -1; 
         pthread_mutex_init(&sessions[i].session_lock, NULL); 
@@ -659,6 +657,7 @@ int main(int argc, char** argv) {
 
     struct sigaction sa_int, sa_usr1;
     
+    // Aponta para a funcao signal_handler
     sa_int.sa_handler = signal_handler;
     sigemptyset(&sa_int.sa_mask);
     sa_int.sa_flags = 0; 
@@ -710,7 +709,6 @@ int main(int argc, char** argv) {
         pthread_mutex_destroy(&sessions[i].session_lock);
     }
     
-    // top5_mutex foi removido, logo não precisa de ser destruído
     free(sessions);
     close(shutdown_pipe[0]); close(shutdown_pipe[1]); 
     unlink(registry_pipe);
