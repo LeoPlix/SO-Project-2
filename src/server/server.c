@@ -18,17 +18,44 @@
 // ===================
 // 1. GLOBAIS E ESTADO
 
-session_t *sessions = NULL; // Active sessions
+session_t *sessions = NULL; 
 int max_games = 0;
-connection_buffer_t conn_buffer; // Para gerir pedidos de comunicação
+connection_buffer_t conn_buffer; 
 _Atomic int server_running = 1;
 _Atomic int sigusr1_received = 0;
-pthread_mutex_t top5_mutex = PTHREAD_MUTEX_INITIALIZER; // Protege geração do top5
+// NOTA: top5_mutex foi removido pois é desnecessário neste modelo de threads
 char registry_pipe[MAX_PIPE_PATH_LENGTH];
 char levels_dir[256];
 int shutdown_pipe[2]; 
 
-// Forward declarations (necessário para funções que se chamam mutuamente)
+// --- OTIMIZAÇÃO: Cache de Níveis ---
+// Evita acesso ao diretório (opendir/readdir) durante o jogo crítico
+char cached_level_files[100][256];
+int cached_num_levels = 0;
+
+void init_level_cache(const char *dir_path) {
+    DIR* level_dir = opendir(dir_path);
+    if (!level_dir) {
+        perror("Failed to cache levels");
+        exit(1);
+    }
+
+    struct dirent* entry;
+    while ((entry = readdir(level_dir)) != NULL && cached_num_levels < 100) {
+        if (entry->d_name[0] == '.') continue;
+        size_t len = strlen(entry->d_name);
+        // Filtra apenas ficheiros .lvl
+        if (len > 4 && strcmp(entry->d_name + len - 4, ".lvl") == 0) {
+            strncpy(cached_level_files[cached_num_levels], entry->d_name, 255);
+            cached_level_files[cached_num_levels][255] = '\0';
+            cached_num_levels++;
+        }
+    }
+    closedir(level_dir);
+    // Nota: A ordem depende do sistema de ficheiros (pode não ser alfabética)
+}
+
+// Forward declarations
 void send_board_update(session_t *sess);
 int load_next_level(session_t *sess);
 void* update_sender(void* arg);
@@ -49,17 +76,14 @@ void init_connection_buffer(connection_buffer_t *buffer) {
     pthread_mutex_init(&buffer->mutex, NULL);
 }
 
-// Apenas sinaliza paragem 
 void destroy_connection_buffer(connection_buffer_t *buffer) {
     pthread_mutex_lock(&buffer->mutex);
     buffer->active = 0;
     pthread_mutex_unlock(&buffer->mutex);
-    // Acorda threads bloqueadas no sem_wait
     if (buffer->empty != SEM_FAILED) sem_post(buffer->empty);
     if (buffer->full != SEM_FAILED) sem_post(buffer->full);
 }
 
-// Destrói recursos 
 void cleanup_connection_resources(connection_buffer_t *buffer) {
     if (buffer->empty != SEM_FAILED) { sem_close(buffer->empty); sem_unlink("/pacmanist_empty"); }
     if (buffer->full != SEM_FAILED) { sem_close(buffer->full); sem_unlink("/pacmanist_full"); }
@@ -67,40 +91,36 @@ void cleanup_connection_resources(connection_buffer_t *buffer) {
 }
 
 void buffer_insert(connection_buffer_t *buffer, connection_request_t *request) {
-    // Verificação rápida antes de esperar pelo semáforo
     pthread_mutex_lock(&buffer->mutex);
     if (!buffer->active) { pthread_mutex_unlock(&buffer->mutex); return; }
     pthread_mutex_unlock(&buffer->mutex);
 
-    if (sem_wait(buffer->empty) != 0) return; // Wait por espaço livre
+    if (sem_wait(buffer->empty) != 0) return; 
 
     pthread_mutex_lock(&buffer->mutex);
     if (buffer->active) {
         buffer->requests[buffer->in] = *request;
         buffer->in = (buffer->in + 1) % BUFFER_SIZE;
-        sem_post(buffer->full); // Sinaliza item disponível
+        sem_post(buffer->full); 
     } else {
-        sem_post(buffer->empty); // Devolve o token se estiver a encerrar
+        sem_post(buffer->empty); 
     }
     pthread_mutex_unlock(&buffer->mutex);
 }
 
-// Garante que só se consome pedidos quando o buffer está ativo e há pedidos disponíveis
 int buffer_remove(connection_buffer_t *buffer, connection_request_t *request) {
-    // Se destroy_connection_buffer for chamado, ele faz post no semáforo, acordando esta thread
-    if (sem_wait(buffer->full) != 0) return -1; // Espera por item disponível
+    if (sem_wait(buffer->full) != 0) return -1; 
 
     pthread_mutex_lock(&buffer->mutex);
     if (buffer->active) {
         *request = buffer->requests[buffer->out];
         buffer->out = (buffer->out + 1) % BUFFER_SIZE;
-        sem_post(buffer->empty); // Sinaliza espaço livre
+        sem_post(buffer->empty); 
         pthread_mutex_unlock(&buffer->mutex);
         return 0;
     }
     
-    // Se acordou mas o buffer não está ativo (shutdown)
-    sem_post(buffer->full); // Repõe o token para outras threads acordarem e saírem
+    sem_post(buffer->full); 
     pthread_mutex_unlock(&buffer->mutex);
     return -1;
 }
@@ -108,7 +128,6 @@ int buffer_remove(connection_buffer_t *buffer, connection_request_t *request) {
 // =========================================
 // 3. NÍVEIS, RECURSOS E PONTUAÇÃO (Helpers)
 
-// Liberta recursos internos de uma sessão (pipes, memória do tabuleiro)
 void free_session_resources(session_t *sess) {
     if (sess->req_fd != -1) { close(sess->req_fd); sess->req_fd = -1; }
     if (sess->notif_fd != -1) { close(sess->notif_fd); sess->notif_fd = -1; }
@@ -120,39 +139,17 @@ void free_session_resources(session_t *sess) {
     sess->game_active = 0; 
 }
 
-// Níveis e ficheiros
+// --- OTIMIZAÇÃO: load_next_level usa cache ---
 int load_next_level(session_t *sess) {
-    DIR* level_dir = opendir(levels_dir);
-    if (!level_dir) {
-        debug("Session %d: Failed to open levels directory\n", sess->session_id);
-        return -1;
+    // Acesso direto à memória pré-carregada (muito mais rápido que opendir)
+    if (sess->current_level >= cached_num_levels) {
+        debug("Session %d: No more levels (current: %d)\n", sess->session_id, sess->current_level);
+        return -1; 
     }
 
-    char level_files[100][256];
-    int num_levels = 0;
-    struct dirent* entry;
-
-    while ((entry = readdir(level_dir)) != NULL && num_levels < 100) {
-        if (entry->d_name[0] == '.') continue;
-        // Otimização: Verificação simples de extensão antes de processar
-        size_t len = strlen(entry->d_name);
-        if (len > 4 && strcmp(entry->d_name + len - 4, ".lvl") == 0) {
-            strncpy(level_files[num_levels], entry->d_name, 255);
-            level_files[num_levels][255] = '\0';
-            num_levels++;
-        }
-    }
-    closedir(level_dir);
-
-    debug("Session %d: Found %d levels, current: %d\n", sess->session_id, num_levels, sess->current_level);
-
-    if (sess->current_level >= num_levels) return -1; // Sem mais níveis
-
-    // Preservar pontos
     int accumulated_points = 0;
     if (sess->board && sess->board->n_pacmans > 0) accumulated_points = sess->board->pacmans[0].points;
 
-    // Recarregar board
     if (sess->board) unload_level(sess->board);
     else {
         sess->board = malloc(sizeof(board_t));
@@ -162,33 +159,34 @@ int load_next_level(session_t *sess) {
         }
     }
 
-    debug("Session %d: Loading %s\n", sess->session_id, level_files[sess->current_level]);
-    if (load_level(sess->board, level_files[sess->current_level], levels_dir, 0) != 0) return -1;
+    debug("Session %d: Loading %s\n", sess->session_id, cached_level_files[sess->current_level]);
+    
+    if (load_level(sess->board, cached_level_files[sess->current_level], levels_dir, 0) != 0) return -1;
 
-    // Restaurar pontos
     if (sess->board->n_pacmans > 0) sess->board->pacmans[0].points = accumulated_points;
     return 0;
 }
 
-// Estrutura auxiliar e função de comparação para qsort
 struct score_entry { int id; int pts; };
 
 int compare_scores(const void *a, const void *b) {
-    // Ordem decrescente de pontos
     return ((struct score_entry*)b)->pts - ((struct score_entry*)a)->pts;
 }
 
+// --- OTIMIZAÇÃO: Geração de Top 5 Sem Mutex Global ---
 void generate_top5_file() {
-    // Mutex para evitar múltiplas execuções simultâneas
-    if (pthread_mutex_trylock(&top5_mutex) != 0) {
-        debug("Top 5 generation already in progress, skipping...\n");
-        return; // Já está a gerar, ignora este pedido
-    }
-    
     debug("Generating top 5 clients file...\n");
-    struct score_entry scores[max_games];
+    
+    // Alocação dinâmica para evitar stack overflow com muitos jogos
+    struct score_entry *scores = malloc(max_games * sizeof(struct score_entry));
+    if (!scores) {
+        debug("Failed to allocate memory for scores\n");
+        return; 
+    }
+
     int num = 0;
 
+    // Fase 1: Snapshot rápido dos dados (Lock Sessão -> Copy -> Unlock Sessão)
     for (int i = 0; i < max_games; i++) {
         pthread_mutex_lock(&sessions[i].session_lock);
         if (sessions[i].active && sessions[i].board) {
@@ -198,42 +196,43 @@ void generate_top5_file() {
         }
         pthread_mutex_unlock(&sessions[i].session_lock);
     }
-
-    // Otimização: Uso de qsort (Quick Sort) em vez de Bubble Sort
+    
+    // Fase 2: Processamento pesado e I/O (Sem locks a bloquear o jogo)
     if (num > 1) {
         qsort(scores, num, sizeof(struct score_entry), compare_scores);
     }
 
-    // Escrever o ficheiro
     FILE *f = fopen("top5.txt", "w");
     if (f) {
         fprintf(f, "Top 5 Clientes por Pontuação\n================================\n\n");
         int limit = (num < 5) ? num : 5;
-        for (int i = 0; i < limit; i++) fprintf(f, "%d. Cliente ID %d: %d pontos\n", i + 1, scores[i].id, scores[i].pts);
+        for (int i = 0; i < limit; i++) {
+            fprintf(f, "%d. Cliente ID %d: %d pontos\n", i + 1, scores[i].id, scores[i].pts);
+        }
         if (num == 0) fprintf(f, "Nenhum cliente ativo.\n");
         fclose(f);
         debug("Top 5 generated with %d clients\n", limit);
     } else {
         debug("Failed to open top5.txt for writing\n");
     }
-    
-    pthread_mutex_unlock(&top5_mutex);
+
+    free(scores);
 }
 
 // ==========================
 // LÓGICA DO JOGO E PROTOCOLO
 
-// Envia update do board para o cliente
+// --- OTIMIZAÇÃO: Loop de atualização simplificado ---
 void send_board_update(session_t *sess) {
     if (!sess->board || sess->notif_fd == -1) return;
     board_t *b = sess->board;
     
-    // Otimização: Buffer maior para evitar overflow em mapas grandes (ex: 100x100)
+    // Buffer grande para evitar overflows em mapas grandes
     char msg[16384]; 
     int off = 0;
 
+    // Header fixo
     msg[off++] = OP_CODE_BOARD;
-
     memcpy(msg + off, &b->width, sizeof(int)); off += sizeof(int);
     memcpy(msg + off, &b->height, sizeof(int)); off += sizeof(int);
     memcpy(msg + off, &b->tempo, sizeof(int)); off += sizeof(int);
@@ -246,26 +245,28 @@ void send_board_update(session_t *sess) {
     memcpy(msg + off, &points_val, sizeof(int)); off += sizeof(int);
 
     int total_cells = b->width * b->height;
-    // Otimização: Switch é geralmente mais eficiente que múltiplos if-else e evita verificações repetidas
+    
     for (int i = 0; i < total_cells; i++) {
-        char ch = b->board[i].content;
-        switch(ch) {
-            case 'W': msg[off++] = '#'; break;
-            case 'P': msg[off++] = 'C'; break;
-            case 'M': msg[off++] = 'M'; break;
+        char content = b->board[i].content;
+        char out_char;
+
+        // Switch direto é mais eficiente que múltiplos if/else encadeados para caracteres
+        switch(content) {
+            case 'W': out_char = '#'; break;
+            case 'P': out_char = 'C'; break;
+            case 'M': out_char = 'M'; break;
             default:
-                if (b->board[i].has_portal) msg[off++] = '@';
-                else if (b->board[i].has_dot) msg[off++] = '.';
-                else msg[off++] = ' ';
+                if (b->board[i].has_dot) out_char = '.';
+                else if (b->board[i].has_portal) out_char = '@';
+                else out_char = ' ';
                 break;
         }
+        msg[off++] = out_char;
     }
     
-    if (write(sess->notif_fd, msg, off) == -1) {}
+    if (write(sess->notif_fd, msg, off) == -1) {} // Ignorar erro de pipe quebrado pontual
 }
 
-// Retorna 1 se o jogo continua, 0 se o jogo deve parar
-// Retorna 2 se passou de nível (requer restart da update_thread)
 int handle_move_result(session_t *sess, int result) {
     if (result == REACHED_PORTAL) {
         debug("Session %d: Pacman reached portal!\n", sess->session_id);
@@ -273,6 +274,7 @@ int handle_move_result(session_t *sess, int result) {
         pthread_mutex_lock(&sess->session_lock);
         sess->current_level++;
         
+        // Carrega nível usando a cache (rápido)
         if (load_next_level(sess) != 0) {
             sess->victory = 1;
             sess->game_active = 0;
@@ -281,11 +283,10 @@ int handle_move_result(session_t *sess, int result) {
             return 0; 
         }
         
-        sess->game_active = 1;  // Reativa o jogo
+        sess->game_active = 1;
         send_board_update(sess);
         pthread_mutex_unlock(&sess->session_lock);
         
-        // Restart update_sender thread
         if (pthread_create(&sess->update_thread, NULL, update_sender, sess) != 0) {
             debug("Session %d: Failed to restart update thread\n", sess->session_id);
             pthread_mutex_lock(&sess->session_lock);
@@ -293,8 +294,7 @@ int handle_move_result(session_t *sess, int result) {
             pthread_mutex_unlock(&sess->session_lock);
             return 0;
         }
-        
-        return 2; // Indica que passou de nível
+        return 2; 
     } 
     
     if (result == DEAD_PACMAN) {
@@ -329,7 +329,6 @@ void* update_sender(void* arg) {
             board_t *b = sess->board;
             pthread_rwlock_wrlock(&b->state_lock);
             
-            // Movimento Monstros
             for (int i = 0; i < b->n_ghosts; i++) {
                 if (b->ghosts[i].n_moves > 0)
                     move_ghost(b, i, &b->ghosts[i].moves[b->ghosts[i].current_move % b->ghosts[i].n_moves]);
@@ -344,7 +343,6 @@ void* update_sender(void* arg) {
     return NULL;
 }
 
-// Gere toda a vida de uma sessão de jogo
 void* session_handler(void* arg) {
     session_t *sess = (session_t*)arg;
     debug("Session %d handler started\n", sess->session_id);
@@ -374,40 +372,37 @@ void* session_handler(void* arg) {
     int keep_running = 1;
     int update_thread_joined = 0;
 
-    while (keep_running && server_running) { // Verificar server_running
+    while (keep_running && server_running) { 
         pthread_mutex_lock(&sess->session_lock);
         keep_running = sess->game_active;
         pthread_mutex_unlock(&sess->session_lock);
         
         if (!keep_running) break;
         
-        // --- ALTERAÇÃO: Usar select com timeout em vez de read bloqueante ---
         fd_set read_fds;
         FD_ZERO(&read_fds);
         FD_SET(sess->req_fd, &read_fds);
 
         struct timeval tv;
         tv.tv_sec = 0;
-        tv.tv_usec = 100000; // 100ms timeout
+        tv.tv_usec = 100000; // 100ms timeout para verificar flags
 
         int retval = select(sess->req_fd + 1, &read_fds, NULL, NULL, &tv);
 
-        if (!server_running) break; // Verificar shutdown após o select
+        if (!server_running) break; 
 
         if (retval == -1) {
-            if (errno == EINTR) continue; // Sinal recebido, tentar de novo
+            if (errno == EINTR) continue; 
             debug("Session %d: Select error\n", sess->session_id);
             break;
         } else if (retval == 0) {
-            continue; // Timeout, volta ao início do loop para verificar flags
+            continue; 
         }
 
-        // Se chegámos aqui, há dados para ler
         if (read(sess->req_fd, buf, sizeof(buf)) <= 0) {
             debug("Client disconnected or error\n");
             break; 
         }
-        // -------------------------------------------------------------------
 
         pthread_mutex_lock(&sess->session_lock);
         if (buf[0] == OP_CODE_DISCONNECT) {
@@ -435,7 +430,7 @@ void* session_handler(void* arg) {
                 
                 int move_result = handle_move_result(sess, res);
                 if (move_result == 2) {
-                    update_thread_joined = 0;
+                    update_thread_joined = 0; // Nova thread foi criada
                 } else if (move_result == 0) {
                     break;
                 }
@@ -477,7 +472,6 @@ void* session_handler(void* arg) {
     return NULL;
 }
 
-// Aceita novos clientes e cria sessões de jogo
 void* manager_thread(void* arg) {
     int id = *(int*)arg; free(arg);
     sigset_t mask; sigemptyset(&mask); sigaddset(&mask, SIGUSR1); pthread_sigmask(SIG_BLOCK, &mask, NULL);
@@ -490,12 +484,10 @@ void* manager_thread(void* arg) {
             continue;
         }
 
-        // Extrair o ID do cliente ANTES de procurar slot
         char *filename = strrchr(req.req_pipe_path, '/');
         if (filename) filename++; else filename = req.req_pipe_path;
         int requested_id = atoi(filename);
 
-        // Percorre todas as sessões para ver se este ID já está ativo
         int is_duplicate = 0;
         for (int i = 0; i < max_games; i++) {
             pthread_mutex_lock(&sessions[i].session_lock);
@@ -503,27 +495,22 @@ void* manager_thread(void* arg) {
                 is_duplicate = 1;
             }
             pthread_mutex_unlock(&sessions[i].session_lock);
-            
             if (is_duplicate) break; 
         }
 
         if (is_duplicate) {
             debug("Manager %d: Client ID %d already active. Ignoring request.\n", id, requested_id);
-            // Ignora o pedido e volta ao início do loop
             continue;
         }
 
         int sess_id = -1;
-        // Procura slot livre
         for (int i = 0; i < max_games; i++) {
             pthread_mutex_lock(&sessions[i].session_lock);
             if (!sessions[i].active) {
                 sess_id = i; 
                 sessions[i].active = 1; 
                 
-                // Atribuição do ID (que já extraímos em cima)
                 sessions[i].session_id = requested_id;
-                
                 sessions[i].game_active = 1; 
                 sessions[i].victory = 0; 
                 sessions[i].current_level = 0;
@@ -538,15 +525,13 @@ void* manager_thread(void* arg) {
 
         if (sess_id == -1) { 
             debug("Manager %d: No slots available, putting request back\n", id);
-            // Colocar pedido de volta no buffer para reprocessar quando houver slot
             buffer_insert(&conn_buffer, &req);
-            sleep(1); // Esperar 1 segundo antes de tentar novamente
+            sleep(1); 
             continue;
         }
         
         session_t *sess = &sessions[sess_id];
         
-        // Abrir pipes ANTES de enviar confirmação (evita deadlock)
         sess->req_fd = open(req.req_pipe_path, O_RDONLY);
         if (sess->req_fd == -1) {
             debug("Manager %d: Failed to open req_pipe\n", id);
@@ -566,7 +551,6 @@ void* manager_thread(void* arg) {
             continue;
         }
         
-        // Agora enviar mensagem de confirmação ao cliente
         char confirm_msg[2] = { OP_CODE_CONNECT, 0 };
         if (write(sess->notif_fd, confirm_msg, 2) == -1) {
             perror("Failed to send confirmation");
@@ -581,6 +565,7 @@ void* manager_thread(void* arg) {
         sess->board = NULL;
         
         pthread_mutex_lock(&sess->session_lock);
+        // Usa a nova função com cache
         int level_loaded = (load_next_level(sess) == 0);
         pthread_mutex_unlock(&sess->session_lock);
         
@@ -599,7 +584,6 @@ void* manager_thread(void* arg) {
     return NULL;
 }
 
-// Recebe e prepara um novo pedido de ligação de cliente
 void* host_thread(void* arg) {
     (void)arg;
     debug("Host thread started\n");
@@ -608,39 +592,36 @@ void* host_thread(void* arg) {
     if (reg_fd == -1) { debug("Failed to open registry\n"); return NULL; }
 
     while (server_running) {
-        // Verifica se recebeu SIGUSR1
         if (sigusr1_received) { 
             sigusr1_received = 0; 
             generate_top5_file(); 
         }
         
-        // Usa select com timeout para não bloquear indefinidamente
         fd_set readfds;
         FD_ZERO(&readfds);
         FD_SET(reg_fd, &readfds);
         
         struct timeval timeout;
         timeout.tv_sec = 0;
-        timeout.tv_usec = 500000; // 500ms timeout
+        timeout.tv_usec = 500000; 
         
         int ready = select(reg_fd + 1, &readfds, NULL, NULL, &timeout);
         
         if (!server_running) break;
         
         if (ready < 0) {
-            if (errno == EINTR) continue; // Sinal recebido, volta ao loop
+            if (errno == EINTR) continue; 
             sleep_ms(100);
             continue;
         }
         
-        if (ready == 0) continue; // Timeout, volta ao loop para verificar sigusr1_received
+        if (ready == 0) continue; 
         
-        // Há dados para ler
         char buf[1 + MAX_PIPE_PATH_LENGTH * 3];
         ssize_t n = read(reg_fd, buf, sizeof(buf));
         
         if (n <= 0) {
-            if (n == 0) { // EOF - reabrir
+            if (n == 0) { 
                 close(reg_fd);
                 reg_fd = open(registry_pipe, O_RDWR | O_NONBLOCK);
                 if (reg_fd == -1) sleep_ms(100);
@@ -672,7 +653,7 @@ void signal_handler(int signum) {
     if (signum == SIGINT) {
         server_running = 0;
         char c = 1; 
-        if (write(shutdown_pipe[1], &c, 1) == -1) {} // Ignorar erro
+        if (write(shutdown_pipe[1], &c, 1) == -1) {} 
     } else if (signum == SIGUSR1) {
         sigusr1_received = 1;
     }
@@ -687,10 +668,13 @@ int main(int argc, char** argv) {
     strncpy(levels_dir, argv[1], 255); 
     strncpy(registry_pipe, argv[3], MAX_PIPE_PATH_LENGTH-1);
     
+    // Inicialização da cache de níveis no arranque (I/O intensivo feito apenas uma vez)
+    init_level_cache(levels_dir);
+
     if (pipe(shutdown_pipe) == -1) return 1;
 
     open_debug_file("server_debug.log");
-    debug("Starting server. Max games: %d\n", max_games);
+    debug("Starting server. Max games: %d. Levels cached: %d\n", max_games, cached_num_levels);
 
     sessions = calloc(max_games, sizeof(session_t));
     if (!sessions) { fprintf(stderr, "Failed to allocate sessions\n"); return 1; }
@@ -740,33 +724,25 @@ int main(int argc, char** argv) {
 
     debug("Shutdown signal received.\n");
 
-    // 1. Acordar manager_threads (estão no sem_wait)
     destroy_connection_buffer(&conn_buffer);
     
-    // 2. Acordar host_thread (está no select ou read do registry)
     int dummy = open(registry_pipe, O_WRONLY | O_NONBLOCK);
     if(dummy != -1) close(dummy);
-
-    // 3. (CORREÇÃO) Remover o loop que fechava FDs aqui. 
-    // As session_handlers vão acordar pelo timeout do select(), 
-    // ver que server_running é 0 e sair sozinhas.
-
+ 
     pthread_join(host_tid, NULL); 
     for(int i=0; i<max_games; i++) pthread_join(mgr_tids[i], NULL);
     free(mgr_tids);
 
     cleanup_connection_resources(&conn_buffer);
 
-    // Limpeza final de memória
     for(int i=0; i<max_games; i++) {
         pthread_mutex_lock(&sessions[i].session_lock);
-        // Garante que libertamos recursos se alguma sessão ficou a meio
         if(sessions[i].active) free_session_resources(&sessions[i]);
         pthread_mutex_unlock(&sessions[i].session_lock);
         pthread_mutex_destroy(&sessions[i].session_lock);
     }
     
-    pthread_mutex_destroy(&top5_mutex);
+    // top5_mutex foi removido, logo não precisa de ser destruído
     free(sessions);
     close(shutdown_pipe[0]); close(shutdown_pipe[1]); 
     unlink(registry_pipe);
