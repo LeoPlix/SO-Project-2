@@ -371,6 +371,10 @@ void* session_handler(void* arg) {
     char buf[256];
     int keep_running = 1;
     int update_thread_joined = 0;
+    
+    // Tornar o pipe não-bloqueante para evitar select()
+    int flags = fcntl(sess->req_fd, F_GETFL, 0);
+    fcntl(sess->req_fd, F_SETFL, flags | O_NONBLOCK);
 
     while (keep_running && server_running) { 
         pthread_mutex_lock(&sess->session_lock);
@@ -379,30 +383,28 @@ void* session_handler(void* arg) {
         
         if (!keep_running) break;
         
-        fd_set read_fds;
-        FD_ZERO(&read_fds);
-        FD_SET(sess->req_fd, &read_fds);
-
-        struct timeval tv;
-        tv.tv_sec = 0;
-        tv.tv_usec = 100000; // 100ms timeout para verificar flags
-
-        int retval = select(sess->req_fd + 1, &read_fds, NULL, NULL, &tv);
-
-        if (!server_running) break; 
-
-        if (retval == -1) {
-            if (errno == EINTR) continue; 
-            debug("Session %d: Select error\n", sess->session_id);
-            break;
-        } else if (retval == 0) {
-            continue; 
-        }
-
-        if (read(sess->req_fd, buf, sizeof(buf)) <= 0) {
+        // Tentar ler sem bloquear
+        ssize_t bytes_read = read(sess->req_fd, buf, sizeof(buf));
+        
+        if (bytes_read > 0) {
+            // Dados recebidos - processar
+        } else if (bytes_read == 0) {
             debug("Client disconnected or error\n");
-            break; 
+            break;
+        } else {
+            // bytes_read == -1
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                sleep_ms(50);
+                continue;
+            } else if (errno == EINTR) {
+                continue;
+            } else {
+                debug("Session %d: Read error: %s\n", sess->session_id, strerror(errno));
+                break;
+            }
         }
+
+        // Processamento de comandos (dados já lidos acima)
 
         pthread_mutex_lock(&sess->session_lock);
         if (buf[0] == OP_CODE_DISCONNECT) {
@@ -597,34 +599,20 @@ void* host_thread(void* arg) {
             generate_top5_file(); 
         }
         
-        fd_set readfds;
-        FD_ZERO(&readfds);
-        FD_SET(reg_fd, &readfds);
-        
-        struct timeval timeout;
-        timeout.tv_sec = 0;
-        timeout.tv_usec = 500000; 
-        
-        int ready = select(reg_fd + 1, &readfds, NULL, NULL, &timeout);
-        
-        if (!server_running) break;
-        
-        if (ready < 0) {
-            if (errno == EINTR) continue; 
-            sleep_ms(100);
-            continue;
-        }
-        
-        if (ready == 0) continue; 
-        
+        // Tentar ler sem bloquear (reg_fd já está em O_NONBLOCK)
         char buf[1 + MAX_PIPE_PATH_LENGTH * 3];
         ssize_t n = read(reg_fd, buf, sizeof(buf));
         
         if (n <= 0) {
             if (n == 0) { 
+                // EOF - reabrir o pipe
                 close(reg_fd);
                 reg_fd = open(registry_pipe, O_RDWR | O_NONBLOCK);
                 if (reg_fd == -1) sleep_ms(100);
+            } else if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                // Sem dados - esperar um pouco
+                struct timespec ts = {0, 100000000}; // 100ms
+                nanosleep(&ts, NULL);
             } else if (errno != EINTR) {
                 sleep_ms(100);
             }
