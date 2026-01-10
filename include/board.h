@@ -59,7 +59,7 @@ typedef struct {
     char level_name[256]; //name for the level file to keep track of which will be the next
     char pacman_file[256]; // file with pacman movements
     char ghosts_files[MAX_GHOSTS][256]; // files with monster movements
-    int tempo; // Duracao de cada jogada???
+    int tempo; 
     pthread_rwlock_t state_lock;
 } board_t;
 

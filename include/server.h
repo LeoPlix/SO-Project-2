@@ -38,11 +38,11 @@ typedef struct {
     int out;
     sem_t *empty; // semáforo para slots vazios
     sem_t *full;  // semáforo para slots cheios
-    pthread_mutex_t mutex; // mutex para acesso exclusivo
-    int active;   // Flag para desativar o buffer no shutdown
+    pthread_mutex_t mutex;
+    int active; 
 } connection_buffer_t;
 
-// Variáveis Globais (extern)
+// Variáveis Globais 
 extern _Atomic int server_running;
 extern _Atomic int sigusr1_received;
 extern char registry_pipe[MAX_PIPE_PATH_LENGTH];
