@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <sys/stat.h>
 #include <stdlib.h>
+#include <pthread.h>
 
 
 struct Session {
@@ -19,6 +20,7 @@ struct Session {
 };
 
 static struct Session session = {.id = -1};
+static pthread_mutex_t session_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 int pacman_connect(char const *req_pipe_path, char const *notif_pipe_path, char const *server_pipe_path) {
   // Guardar caminhos dos pipes
@@ -97,7 +99,11 @@ int pacman_connect(char const *req_pipe_path, char const *notif_pipe_path, char 
 }
 
 void pacman_play(char command) {
-  if (session.req_pipe == -1) {
+  pthread_mutex_lock(&session_mutex);
+  int req_pipe = session.req_pipe;
+  pthread_mutex_unlock(&session_mutex);
+  
+  if (req_pipe == -1) {
     return;
   }
   
@@ -106,43 +112,53 @@ void pacman_play(char command) {
   msg[0] = OP_CODE_PLAY;
   msg[1] = command;
 
-  if (write(session.req_pipe, msg, 2) == -1) {
+  if (write(req_pipe, msg, 2) == -1) {
       perror("Failed to send play command");
   }
 }
 
 int pacman_disconnect() {
-  if (session.req_pipe == -1) {
+  pthread_mutex_lock(&session_mutex);
+  int req_pipe = session.req_pipe;
+  int notif_pipe = session.notif_pipe;
+  char req_path[MAX_PIPE_PATH_LENGTH + 1];
+  char notif_path[MAX_PIPE_PATH_LENGTH + 1];
+  strncpy(req_path, session.req_pipe_path, MAX_PIPE_PATH_LENGTH + 1);
+  strncpy(notif_path, session.notif_pipe_path, MAX_PIPE_PATH_LENGTH + 1);
+  
+  if (req_pipe == -1) {
+    pthread_mutex_unlock(&session_mutex);
     return 1;
   }
+  pthread_mutex_unlock(&session_mutex);
   
   // Enviar pedido de desconexão
   char msg[1];
   msg[0] = OP_CODE_DISCONNECT;
   
-  if (write(session.req_pipe, msg, 1) == -1) {
+  if (write(req_pipe, msg, 1) == -1) {
       perror("Failed to send disconnect");
-      // Mesmo falhando o envio, tentamos limpar os recursos abaixo
   }
   
   // Aguardar resposta
-  char response[2] = {0}; // Inicializar a zero
+  char response[2] = {0};
   
-  if (read(session.notif_pipe, response, 2) <= 0) {
-      // Se falhar a leitura ou ler 0 bytes (EOF), assumimos erro
-      // mas continuamos para limpar os pipes locais
+  if (read(notif_pipe, response, 2) <= 0) {
+      // Continuar para limpar recursos
   }
   
+  pthread_mutex_lock(&session_mutex);
   // Fechar pipes
   close(session.req_pipe);
   close(session.notif_pipe);
   
   // Remover FIFOs
-  unlink(session.req_pipe_path);
-  unlink(session.notif_pipe_path);
+  unlink(req_path);
+  unlink(notif_path);
   
   session.req_pipe = -1;
   session.notif_pipe = -1;
+  pthread_mutex_unlock(&session_mutex);
   
   return response[1];
 }
@@ -150,13 +166,17 @@ int pacman_disconnect() {
 Board receive_board_update(void) {
   Board board = {0};
   
-  if (session.notif_pipe == -1) {
+  pthread_mutex_lock(&session_mutex);
+  int notif_pipe = session.notif_pipe;
+  pthread_mutex_unlock(&session_mutex);
+  
+  if (notif_pipe == -1) {
     return board;
   }
   
   // Ler mensagem: OP_CODE | width | height | tempo | victory | game_over | accumulated_points | board_data
   char buffer[8192];
-  ssize_t bytes_read = read(session.notif_pipe, buffer, sizeof(buffer));
+  ssize_t bytes_read = read(notif_pipe, buffer, sizeof(buffer));
   
   if (bytes_read <= 0) {
     return board;

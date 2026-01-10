@@ -23,12 +23,10 @@ int max_games = 0;
 connection_buffer_t conn_buffer; 
 _Atomic int server_running = 1;
 _Atomic int sigusr1_received = 0;
-// NOTA: top5_mutex foi removido pois é desnecessário neste modelo de threads
 char registry_pipe[MAX_PIPE_PATH_LENGTH];
 char levels_dir[256];
 int shutdown_pipe[2]; 
 
-// --- OTIMIZAÇÃO: Cache de Níveis ---
 // Evita acesso ao diretório (opendir/readdir) durante o jogo crítico
 char cached_level_files[100][256];
 int cached_num_levels = 0;
@@ -52,10 +50,8 @@ void init_level_cache(const char *dir_path) {
         }
     }
     closedir(level_dir);
-    // Nota: A ordem depende do sistema de ficheiros (pode não ser alfabética)
 }
 
-// Forward declarations
 void send_board_update(session_t *sess);
 int load_next_level(session_t *sess);
 void* update_sender(void* arg);
@@ -139,7 +135,6 @@ void free_session_resources(session_t *sess) {
     sess->game_active = 0; 
 }
 
-// --- OTIMIZAÇÃO: load_next_level usa cache ---
 int load_next_level(session_t *sess) {
     // Acesso direto à memória pré-carregada (muito mais rápido que opendir)
     if (sess->current_level >= cached_num_levels) {
@@ -173,7 +168,6 @@ int compare_scores(const void *a, const void *b) {
     return ((struct score_entry*)b)->pts - ((struct score_entry*)a)->pts;
 }
 
-// --- OTIMIZAÇÃO: Geração de Top 5 Sem Mutex Global ---
 void generate_top5_file() {
     debug("Generating top 5 clients file...\n");
     
@@ -186,7 +180,7 @@ void generate_top5_file() {
 
     int num = 0;
 
-    // Fase 1: Snapshot rápido dos dados (Lock Sessão -> Copy -> Unlock Sessão)
+    // Snapshot rápido dos dados 
     for (int i = 0; i < max_games; i++) {
         pthread_mutex_lock(&sessions[i].session_lock);
         if (sessions[i].active && sessions[i].board) {
@@ -197,7 +191,7 @@ void generate_top5_file() {
         pthread_mutex_unlock(&sessions[i].session_lock);
     }
     
-    // Fase 2: Processamento pesado e I/O (Sem locks a bloquear o jogo)
+    // Quicksort das pontuações
     if (num > 1) {
         qsort(scores, num, sizeof(struct score_entry), compare_scores);
     }
@@ -222,7 +216,7 @@ void generate_top5_file() {
 // ==========================
 // LÓGICA DO JOGO E PROTOCOLO
 
-// --- OTIMIZAÇÃO: Loop de atualização simplificado ---
+// Envia o board update para o server
 void send_board_update(session_t *sess) {
     if (!sess->board || sess->notif_fd == -1) return;
     board_t *b = sess->board;
@@ -250,7 +244,6 @@ void send_board_update(session_t *sess) {
         char content = b->board[i].content;
         char out_char;
 
-        // Switch direto é mais eficiente que múltiplos if/else encadeados para caracteres
         switch(content) {
             case 'W': out_char = '#'; break;
             case 'P': out_char = 'C'; break;
@@ -264,7 +257,7 @@ void send_board_update(session_t *sess) {
         msg[off++] = out_char;
     }
     
-    if (write(sess->notif_fd, msg, off) == -1) {} // Ignorar erro de pipe quebrado pontual
+    if (write(sess->notif_fd, msg, off) == -1) {} // Ignorar erro de pipe
 }
 
 int handle_move_result(session_t *sess, int result) {
@@ -274,7 +267,7 @@ int handle_move_result(session_t *sess, int result) {
         pthread_mutex_lock(&sess->session_lock);
         sess->current_level++;
         
-        // Carrega nível usando a cache (rápido)
+        // Carrega proximo nível
         if (load_next_level(sess) != 0) {
             sess->victory = 1;
             sess->game_active = 0;
@@ -359,6 +352,7 @@ void* session_handler(void* arg) {
     send_board_update(sess);
     pthread_mutex_unlock(&sess->session_lock);
     
+    // O jogo termina quando se deixarem de criar updates de threads
     if (pthread_create(&sess->update_thread, NULL, update_sender, sess) != 0) {
         debug("Session %d: Failed to create update thread\n", sess->session_id);
         sess->game_active = 0;
@@ -372,7 +366,8 @@ void* session_handler(void* arg) {
     int keep_running = 1;
     int update_thread_joined = 0;
     
-    // Tornar o pipe não-bloqueante para evitar select()
+    // Pipe passa a modo nao bloqueante, permitindo que o servidor
+    // leia dados sem ficar à espera
     int flags = fcntl(sess->req_fd, F_GETFL, 0);
     fcntl(sess->req_fd, F_SETFL, flags | O_NONBLOCK);
 
@@ -392,7 +387,6 @@ void* session_handler(void* arg) {
             debug("Client disconnected or error\n");
             break;
         } else {
-            // bytes_read == -1
             if (errno == EAGAIN || errno == EWOULDBLOCK) {
                 sleep_ms(50);
                 continue;
@@ -404,8 +398,7 @@ void* session_handler(void* arg) {
             }
         }
 
-        // Processamento de comandos (dados já lidos acima)
-
+        // Processamento de comandos
         pthread_mutex_lock(&sess->session_lock);
         if (buf[0] == OP_CODE_DISCONNECT) {
             sess->game_active = 0;
@@ -430,15 +423,17 @@ void* session_handler(void* arg) {
                 pthread_join(sess->update_thread, NULL);
                 update_thread_joined = 1;
                 
+                // Confirma se passa de nível ou se acaba o jogo
                 int move_result = handle_move_result(sess, res);
                 if (move_result == 2) {
-                    update_thread_joined = 0; // Nova thread foi criada
+                    update_thread_joined = 0; 
                 } else if (move_result == 0) {
                     break;
                 }
                 continue;
             }
             
+            // Confirma se o pacman morreu ou de o jogo continua
             int move_result = handle_move_result(sess, res);
             if (move_result == 1) {
                 pthread_mutex_lock(&sess->session_lock);
@@ -489,21 +484,6 @@ void* manager_thread(void* arg) {
         char *filename = strrchr(req.req_pipe_path, '/');
         if (filename) filename++; else filename = req.req_pipe_path;
         int requested_id = atoi(filename);
-
-        int is_duplicate = 0;
-        for (int i = 0; i < max_games; i++) {
-            pthread_mutex_lock(&sessions[i].session_lock);
-            if (sessions[i].active && sessions[i].session_id == requested_id) {
-                is_duplicate = 1;
-            }
-            pthread_mutex_unlock(&sessions[i].session_lock);
-            if (is_duplicate) break; 
-        }
-
-        if (is_duplicate) {
-            debug("Manager %d: Client ID %d already active. Ignoring request.\n", id, requested_id);
-            continue;
-        }
 
         int sess_id = -1;
         for (int i = 0; i < max_games; i++) {

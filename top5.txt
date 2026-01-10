@@ -1,6 +1,5 @@
 Top 5 Clientes por Pontuação
 ================================
 
-1. Cliente ID 2: 16 pontos
-2. Cliente ID 3: 11 pontos
-3. Cliente ID 1: 2 pontos
+1. Cliente ID 1: 26 pontos
+2. Cliente ID 3: 25 pontos
